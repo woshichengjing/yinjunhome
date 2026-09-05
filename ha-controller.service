@@ -1,0 +1,14 @@
+[Unit]
+Description=HA Smart Climate Controller
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/ha-controller/controller.py
+Restart=always
+RestartSec=10
+Environment=TZ=Asia/Shanghai
+Environment=HOME=/root
+
+[Install]
+WantedBy=multi-user.target
