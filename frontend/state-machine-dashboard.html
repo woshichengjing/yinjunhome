@@ -1,0 +1,1558 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🧠 状态机全貌 — 香槟国际</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,system-ui,sans-serif;background:#0d1117;color:#c9d1d9}
+.container{position:relative;z-index:1;max-width:1400px;margin:0 auto}
+.container-grid{position:relative;z-index:1;padding:16px;margin-top:40vh}
+h1{font-size:22px;color:#58a6ff;margin-bottom:4px}
+.sub{color:#8b949e;font-size:12px;margin-bottom:16px}
+.grid4{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px}
+.card h2{font-size:14px;color:#58a6ff;border-bottom:1px solid #21262d;padding-bottom:6px;margin-bottom:8px}
+.card h3{font-size:13px;color:#d2a8ff;margin:8px 0 4px}
+.state-row{display:flex;justify-content:space-between;padding:3px 0;font-size:12px;border-bottom:1px solid #21262d33}
+.state-label{color:#8b949e}
+.state-value{font-weight:600}
+.state-value.ok{color:#3fb950}
+.state-value.warn{color:#d29922}
+.state-value.bad{color:#f85149}
+.state-value.info{color:#58a6ff}
+.decision-box{padding:8px;border-radius:4px;margin:4px 0;font-size:12px}
+.decision-box.ac_on{background:#1b3a1b;border-left:3px solid #3fb950}
+.decision-box.ac_off{background:#3a1b1b;border-left:3px solid #f85149}
+.decision-box.none{background:#1b1f2a;border-left:3px solid #484f58}
+.all-states{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}
+.state-badge{padding:2px 8px;border-radius:10px;font-size:11px;background:#21262d;color:#484f58;border:1px solid #30363d;white-space:nowrap}
+.state-badge.active{background:#1b3a1b;color:#3fb950;border-color:#3fb950;font-weight:600}
+/* 新版卡片式状态机（SVG图标驱动） */
+.state-card{display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid #21262d}
+.state-card:last-child{border-bottom:none}
+.dev-box{border:1px solid #21262d;border-radius:4px;padding:7px 10px;font-size:11px;position:relative;display:inline-block;width:auto;min-width:90px;min-height:55px;height:55px}
+.dev-box .dev-toggle{position:absolute;top:4px;right:4px}
+.dev-box-row{display:flex;align-items:center;gap:3px;flex-wrap:wrap}
+.sc-icon{width:14px;height:14px;flex-shrink:0}
+.sc-body{flex:1;min-width:0}
+.sc-title{font-size:12px;font-weight:600;color:#c9d1d9}
+.sc-state{font-size:14px;font-weight:700;margin-top:2px}
+.sc-state.occ{color:#3fb950}
+.sc-state.entering{color:#d29922}
+.sc-state.empty{color:#8b949e}
+.sc-info{font-size:10px;color:#8b949e;margin-top:2px}
+.sc-badge{display:inline-flex;align-items:center;gap:3px;font-size:10px;padding:2px 6px;border-radius:4px;margin-right:4px}
+.sc-badge.warn{background:rgba(210,153,34,0.15);color:#d29922}
+.sc-badge.bad{background:rgba(248,81,73,0.15);color:#f85149}
+.sc-badge.ok{background:rgba(63,185,80,0.15);color:#3fb950}
+.sc-badge.info{background:rgba(88,166,255,0.15);color:#58a6ff}
+.current-info{font-size:11px;color:#8b949e;margin-top:6px}
+.reason-text{color:#c9d1d9;font-size:12px;margin-top:2px}
+
+
+.refresh{font-size:11px;color:#8b949e;float:right}
+/* Windy 地图卡片 */
+.windy-card{margin:0 0 8px 0}
+.windy-toolbar{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}
+.windy-btn{padding:4px 12px;border-radius:10px;font-size:11px;border:1px solid #30363d;background:#21262d;color:#8b949e;cursor:pointer;transition:all .2s}
+.windy-btn:hover{color:#c9d1d9;border-color:#58a6ff}
+.windy-btn.active{background:#1b3a1b;color:#3fb950;border-color:#3fb950;font-weight:600}
+.windy-card{position:fixed;top:0;left:0;width:100%;height:100vh;z-index:0;pointer-events:none;margin:0}
+.windy-wrapper{position:relative;width:100%;height:100%}
+.windy-map{width:100%;height:100%;border:none;display:block;pointer-events:none}
+.windy-readings{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
+.windy-tip{position:absolute;top:6px;left:10px;max-width:calc(100% - 76px);background:rgba(22,27,34,0.92);color:#c9d1d9;font-size:12px;padding:5px 10px;border-radius:5px;border:1px solid #58a6ff44;z-index:10;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wr-item{display:flex;flex-direction:row;align-items:center;gap:4px;background:#0d1117;border:1px solid #21262d;border-radius:5px;padding:3px 8px}
+.wr-item .wr-label{font-size:10px;color:#8b949e}
+.wr-item .wr-val{font-size:13px;font-weight:600;color:#c9d1d9}
+.wr-item.hot .wr-val{color:#f85149}
+.wr-item.cool .wr-val{color:#58a6ff}
+.wr-section{font-size:10px;color:#8b949e;margin:8px 0 3px;border-top:1px solid #21262d;padding-top:6px}
+.wr-src{display:inline-flex;align-items:center}
+.wr-src svg{width:12px;height:12px;display:block}
+.wr-src.qw{color:#79c0ff}
+.wr-src.local{color:#56d364}
+.emo{width:1em;height:1em;display:inline-block;vertical-align:-0.15em;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.wr-dual{gap:5px}
+.wr-dual .dv{display:inline-flex;align-items:center;gap:2px;font-size:13px;font-weight:600;color:#c9d1d9}
+.wr-dual .dv.hot{color:#f85149}
+.wr-dual .dv.cool{color:#58a6ff}
+.src-ic{width:11px;height:11px;flex-shrink:0}
+.src-ic.qw{color:#79c0ff}
+.src-ic.local{color:#56d364}
+.windy-overlay{position:absolute;right:10px;top:12%;display:flex;flex-direction:column;gap:4px;z-index:10;pointer-events:none;max-height:calc(100% - 100px);overflow:hidden}
+.ov-item{display:inline-flex;align-items:center;gap:3px;background:rgba(13,17,23,0.5);color:#c9d1d9;font-size:11px;font-weight:600;padding:3px 7px;border-radius:5px;border:1px solid #58a6ff33;backdrop-filter:blur(2px)}
+.ov-item .wr-label{font-size:9px;font-weight:400;color:#9aa4af}
+.weather-active .windy-overlay{pointer-events:none}
+.weather-active .windy-tip{pointer-events:none}
+/* 天气交互模式 */
+.weather-back{position:fixed;bottom:24px;right:16px;z-index:25;display:none;align-items:center;gap:6px;padding:8px 16px;background:rgba(22,27,34,0.92);border:1px solid #58a6ff44;border-radius:20px;color:#c9d1d9;font-size:12px;cursor:pointer;backdrop-filter:blur(4px);transition:all .3s}
+.weather-back:hover{background:rgba(27,59,27,0.9);border-color:#3fb950;color:#3fb950}
+.weather-active .weather-back{display:flex}
+.weather-active .windy-card{pointer-events:auto}
+.weather-active .windy-map{pointer-events:auto}
+.weather-active .container-grid{transform:translateY(100vh);transition:transform .4s cubic-bezier(.4,0,.2,1)}
+.weather-active .container{overflow:hidden;pointer-events:none}
+.env-swipe-hint{font-size:10px;color:#484f58;text-align:right;margin-top:4px}
+.windy-click-layer{position:absolute;top:0;left:0;width:100%;height:50vh;z-index:5;cursor:pointer;pointer-events:auto}
+.weather-active .windy-click-layer{display:none}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+</head>
+<body>
+
+<!-- Windy 智能天气地图（仅背景, fixed 全屏, 不可交互） -->
+<div class="windy-card">
+<div class="windy-wrapper">
+<iframe class="windy-map" id="windy-map" src="https://embed.windy.com/embed.html?type=map&location=coordinates&metricTemp=%C2%B0C&metricWind=m/s&metricRain=mm&zoom=7&overlay=wind&level=surface&lat=28.7&lon=120.1&detailLat=30.31&detailLon=120.12&marker=true&play=true&lang=zh-Hans" title="Windy 天气地图"></iframe>
+<div class="windy-click-layer" id="windy-click-layer"></div>
+<div class="windy-tip" id="windy-tip"></div>
+<div class="windy-overlay" id="windy-overlay"></div>
+</div>
+</div>
+
+<!-- 天气交互模式返回按钮 -->
+<button class="weather-back" id="weather-back" onclick="closeWeather()">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+返回
+</button>
+
+<div class="container">
+<span id="status" style="display:none">⚠️ Load failed</span>
+<div class="container-grid">
+<div class="windy-readings" id="weather-panel"></div>
+<div class="grid4">
+<div id="room-devices" style="grid-column:1/-1"></div>
+<div style="grid-column:1/-1;text-align:center;margin-top:8px"><span style="cursor:pointer;font-size:12px;color:#8b949e;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:4px 12px;display:inline-block" onclick="showUnifiedData('energy')"><svg class="emo" viewBox="0 0 24 24" style="width:11px;height:11px;vertical-align:middle;margin-right:3px"><rect x="3" y="13" width="4" height="8" rx="1" fill="#8b949e"/><rect x="10" y="8" width="4" height="13" rx="1" fill="#8b949e"/><rect x="17" y="5" width="4" height="16" rx="1" fill="#8b949e" opacity=".5"/></svg>全屋数据分析</span></div>
+</div>
+</div>
+
+</div>
+
+<script>
+var DATA={},CD=30;
+var _lastOverlay=null;
+
+// 重置天气状态（防 bfcache 恢复）
+document.body.classList.remove('weather-active');
+document.body.style.overflow='';
+
+// 根据视口高度动态计算 Windy 中心，让杭州在屏幕顶到卡片顶之间居中
+var HZ_LAT=30.25,HZ_LON=120.17;
+function windLat(){
+var vh=window.innerHeight;
+var offset=1.7*(vh/800);
+return (HZ_LAT-offset).toFixed(2);
+}
+function applyWindyCenter(){
+var iframe=document.getElementById('windy-map');
+if(!iframe)return;
+var src=iframe.src;
+var nlat=windLat();
+if(src.indexOf('lat='+nlat)>=0)return;
+iframe.src=src.replace(/lat=[\d.]+/,'lat='+nlat);
+}
+window.addEventListener('resize',function(){
+clearTimeout(window._wct);window._wct=setTimeout(applyWindyCenter,300);
+});
+
+// 点击天气背景 → 进入天气交互模式
+document.getElementById('windy-click-layer').addEventListener('click',function(){
+document.body.classList.add('weather-active');
+document.body.style.overflow='hidden';
+var el=document.querySelector('.container-grid');
+if(el){el.style.transition='transform .4s cubic-bezier(.4,0,.2,1)';el.style.transform='translateY(100vh)';}
+});
+function closeWeather(){
+document.body.classList.remove('weather-active');
+document.body.style.overflow='';
+var el=document.querySelector('.container-grid');
+if(el){el.style.transition='transform .4s cubic-bezier(.4,0,.2,1)';el.style.transform='translateY(0)';}
+// 强制重置地图（加时间戳防缓存）
+var iframe=document.getElementById('windy-map');
+var defaultUrl='https://embed.windy.com/embed.html?type=map&location=coordinates&metricTemp=%C2%B0C&metricWind=m/s&metricRain=mm&zoom=7&overlay=wind&level=surface&lat='+windLat()+'&lon=120.1&detailLat=30.31&detailLon=120.12&marker=true&play=true&lang=zh-Hans';
+if(iframe){window._lastUrl=null;iframe.src=defaultUrl+'&_t='+Date.now();}
+}
+
+
+// ── 统一图标库（emoji → Lucide 线条 SVG），全看板渲染时过 EMO() 替换 ──
+var IC={
+'🧠':'<circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/>',
+'🏠':'<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/>',
+'🌡':'<path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/>',
+'🛡':'<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
+'🛏':'<path d="M2 4v16"/><path d="M2 8h18a2 2 0 0 1 2 2v10"/><path d="M2 17h20"/><path d="M6 8v9"/>',
+'📚':'<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>',
+'🛋':'<path d="M20 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v3"/><path d="M2 11v5a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5a2 2 0 0 0-4 0v2H6v-2a2 2 0 0 0-4 0Z"/><path d="M4 18v2"/><path d="M20 18v2"/>',
+'🍽':'<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>',
+'🍳':'<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>',
+'🚿':'<path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C4 11.1 3 13 3 15a7 7 0 0 0 7 7z"/>',
+'🚪':'<path d="M13 4h3a2 2 0 0 1 2 2v14"/><path d="M2 20h3"/><path d="M13 20h9"/><path d="M10 12v.01"/><path d="M13 4.6v16.2a1 1 0 0 1-1.2 1L5 20V5.6a2 2 0 0 1 1.5-2l4-1A2 2 0 0 1 13 4.6Z"/>',
+'🚶':'<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" x2="3" y1="12" y2="12"/>',
+'👤':'<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+'😴':'<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+'💤':'<path d="M16 4h6l-6 8h6"/><path d="M3 12h5l-5 8h5"/>',
+'🌅':'<path d="M12 2v6"/><path d="m8 6 4-4 4 4"/><path d="M2 18h20"/><path d="M22 22H2"/><path d="M16 18a4 4 0 0 0-8 0"/>',
+'🎬':'<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/>',
+'💻':'<path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/>',
+'📺':'<rect width="20" height="15" x="2" y="7" rx="2"/><polyline points="17 2 12 7 7 2"/>',
+'🍵':'<path d="M10 2v2"/><path d="M14 2v2"/><path d="M6 2v2"/><path d="M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"/>',
+'🪥':'<path d="M9 3a3 3 0 0 0-3 3v10a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2V6a3 3 0 0 0-3-3Z"/><path d="M9 18v3"/>',
+'❓':'<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+'✅':'<path d="M20 6 9 17l-5-5"/>',
+'❌':'<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+'⚠':'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+'🕐':'<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+'⏭':'<polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/>',
+'📋':'<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
+'📅':'<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>',
+'→':'<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+'➡':'<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+'📈':'<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
+'📉':'<polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/>',
+'☀':'<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+'🌙':'<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+'❄':'<line x1="2" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/>',
+'🌸':'<path d="M7 20h10"/><path d="M10 20c5.5-2.5.8-6.4 3-10"/><path d="M9.5 9.4c1.1.8 1.8 2.2 2.3 3.7-2 .4-3.5.4-4.8-.3-1.2-.6-2.3-1.9-3-4.2 2.8-.5 4.4 0 5.5.8z"/><path d="M14.1 6a7 7 0 0 0-1.1 4c1.9-.1 3.3-.6 4.3-1.4 1-1 1.6-2.3 1.7-4.6-2.7.1-4 1-4.9 2z"/>',
+'🍂':'<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/>',
+'🌀':'<path d="M21 4H3"/><path d="M18 8H6"/><path d="M19 12H9"/><path d="M16 16h-6"/><path d="M11 20H9"/>',
+'⛈':'<path d="M6 16.3A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 .5 9"/><path d="m13 12-3 5h4l-3 5"/>',
+'🌧':'<path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="M16 14v6"/><path d="M8 14v6"/><path d="M12 16v6"/>',
+'🌫':'<path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="M16 17H7"/><path d="M17 21H9"/>',
+'🏜':'<path d="M12.8 19.6A2 2 0 1 0 14 16H2"/><path d="M17.5 8a2.5 2.5 0 1 1 2 4H2"/><path d="M9.8 4.4A2 2 0 1 1 11 8H2"/>',
+'💨':'<path d="M12.8 19.6A2 2 0 1 0 14 16H2"/><path d="M17.5 8a2.5 2.5 0 1 1 2 4H2"/><path d="M9.8 4.4A2 2 0 1 1 11 8H2"/>',
+'🥵':'<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+'☁':'<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+'🌤':'<path d="M12 2v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="M20 12h2"/><path d="m19.07 4.93-1.41 1.41"/><path d="M16 12a4 4 0 1 0-6.53 3.1"/><path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/>',
+'🧊':'<line x1="2" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/>',
+'😷':'<path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="M16 17H7"/><path d="M17 21H9"/>',
+'🥶':'<line x1="2" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/>',
+'🌵':'<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M2 12h2"/><path d="M20 12h2"/>',
+'👕':'<path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/>',
+'⚡':'<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+'⏸':'<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>',
+'🍃':'<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/>',
+'🔥':'<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+'💧':'<path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/>',
+};
+function EMO(s){
+if(!s)return s;
+s=(''+s).replace(/\uFE0F/g,''); // 去掉变体选择符，统一匹配基础 emoji
+for(var k in IC){ if(s.indexOf(k)>=0) s=s.split(k).join('<svg class="emo" viewBox="0 0 24 24">'+IC[k]+'</svg>'); }
+return s;
+}
+// 静态卡片标题一次性替换（DOM 已就绪，本脚本在 body 末尾）
+[].forEach.call(document.querySelectorAll('.card h2'),function(el){el.innerHTML=EMO(el.innerHTML);});
+
+// ── 天气面板：气象(和风)+本地(传感器) 合并，同类指标双值对比 ──
+var SVG_QW='<svg class="src-ic qw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M6.3 6.3a8 8 0 0 0 0 11.4M17.7 6.3a8 8 0 0 1 0 11.4"/></svg>';
+var SVG_LO='<svg class="src-ic local" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>';
+function _hc(v){v=parseFloat(v);return v>=35?' hot':(v<=5?' cool':'');}
+function renderWeatherPanel(){
+var el=document.getElementById('weather-panel'); if(!el)return;
+var q=window._qw||{}, e=window._ext||{}, c=e.current||{}, f=e.forecast||{};
+var seasonMap={'spring':'🌸 春','summer':'☀️ 夏','autumn':'🍂 秋','winter':'❄️ 冬'};
+var trendMap={'rising':'📈 升温','falling':'📉 降温','stable':'➡️ 平稳'};
+var html='';
+// 同类：气象 vs 本地 双值对比
+var dual=[
+{l:'温度',q:q.temp,e:c.temp,u:'°C',hot:1},
+{l:'湿度',q:q.humidity,e:c.hum,u:'%'},
+{l:'体感',q:q.feelsLike,e:c.apparent_temp,u:'°C',hot:1}
+];
+for(var i=0;i<dual.length;i++){
+var d=dual[i];
+var qv=(d.q==null||d.q==='')?'-':d.q+d.u, ev=(d.e==null||d.e==='')?'-':d.e+d.u;
+var qc=(d.hot&&d.q!=null)?_hc(d.q):'', ec=(d.hot&&d.e!=null)?_hc(d.e):'';
+html+='<div class="wr-item wr-dual"><span class="wr-label">'+d.l+'</span>'
++'<span class="dv'+qc+'">'+SVG_QW+qv+'</span>'
++'<span class="dv'+ec+'">'+SVG_LO+ev+'</span></div>';
+}
+// 上图：天气/风向/风力/能见度/云量 → 浮在地图上
+var mapItems=[
+{l:'天气',v:q.text||null},
+{l:'降雨',v:(q.precip||null)},
+{l:'风向',v:q.windDir||null},
+{l:'风力',v:(q.windScale!=null?q.windScale+'级 '+(q.windSpeed||'?')+'km/h':null)},
+{l:'能见度',v:(q.vis!=null?q.vis+'km':null)},
+{l:'云量',v:(q.cloud!=null?q.cloud+'%':null)}
+];
+var ovh='';
+for(var i=0;i<mapItems.length;i++){ if(mapItems[i].v==null)continue;
+ovh+='<div class="ov-item"><span class="wr-label">'+mapItems[i].l+'</span>'+mapItems[i].v+'</div>';
+}
+var ovEl=document.getElementById('windy-overlay'); if(ovEl)ovEl.innerHTML=EMO(ovh);
+// 气象独有（面板）：仅气压
+var qo=[
+{l:'气压',v:(q.pressure!=null?q.pressure+'hPa':null)}
+];
+for(var i=0;i<qo.length;i++){ if(qo[i].v==null)continue;
+html+='<div class="wr-item">'+SVG_QW+'<span class="wr-label">'+qo[i].l+'</span><span class="wr-val">'+qo[i].v+'</span></div>';
+}
+// 本地独有
+var lo=[
+{l:'新风',v:(e.fresh_eligible!=null?(e.fresh_eligible?'✅ 适宜':'❌ 不满足'):null),title:(e.fresh_reasons||[]).join('；')},
+{l:'趋势',v:(f.trend?(trendMap[f.trend]||f.trend):null)}
+];
+for(var i=0;i<lo.length;i++){ if(lo[i].v==null)continue;
+var tt=lo[i].title?' title="'+(''+lo[i].title).replace(/"/g,'')+'"':'';
+html+='<div class="wr-item"'+tt+'>'+SVG_LO+'<span class="wr-label">'+lo[i].l+'</span><span class="wr-val">'+lo[i].v+'</span></div>';
+}
+el.innerHTML=EMO(html);
+}
+
+
+// 智能天气图层：读 weather_focus.json，仅在 overlay 变化时更新 iframe
+(function(){
+function updateWeather(){
+fetch('/static/data/weather_focus.json?t='+Date.now())
+.then(function(r){if(!r.ok)throw Error('HTTP '+r.status);return r.json();})
+.then(function(f){
+// 提示条
+var overlay=f.overlay, tip=f.tip, color=f.color;
+var tipEl=document.getElementById('windy-tip');
+tipEl.innerHTML=EMO(tip||'');
+var colors={'red':'rgba(200,30,30,0.85)','orange':'rgba(210,110,20,0.88)','yellow':'rgba(200,160,10,0.88)','blue':'rgba(30,90,200,0.85)'};
+tipEl.style.background=colors[color]||'rgba(22,27,34,0.92)';
+tipEl.style.color='#fff';
+// iframe 地图：用 JSON 完整 url，替换坐标让杭州偏上（中心南移）
+if(f.url && f.url!==window._lastUrl){
+var url=f.url.replace(/lat=[\d.]+/,'lat='+windLat()).replace(/lon=[\d.]+/,'lon=120.1').replace(/zoom=\d+/,'zoom=7');
+// 修复 LLM 可能写错的域名（www.windy.com → embed.windy.com/embed.html）
+if(url.indexOf('embed.windy.com')===-1) url=url.replace(/https?:\/\/www\.windy\.com\/?/,'https://embed.windy.com/embed.html?type=map&location=coordinates&metricTemp=%C2%B0C&metricWind=m/s&metricRain=mm&');
+if(url.indexOf('detailLat=')===-1) url+='&detailLat=30.31&detailLon=120.12&marker=true';
+window._lastUrl=url;
+document.getElementById('windy-map').src=url;
+}
+// 实时读数（和风）→ 缓存到全局 _qw，统一渲染
+window._qw=f.readings||{};
+renderWeatherPanel();
+})
+.catch(function(){}); // 静默失败
+}
+updateWeather();
+setInterval(updateWeather,600000); // 天气背景10分钟刷新一次
+})();
+
+setInterval(function(){
+CD--;
+if(CD<=0){CD=30;load();}
+},1000);
+
+var TOGGLE_URL='/api/toggle';
+
+// 设备软关：定时轮询绑定点击 + 加载状态
+setInterval(function(){
+  var btns=document.querySelectorAll('.dev-soft-btn:not([data-bound])');
+  if(btns.length){
+    // 从同源静态文件读取状态
+    fetch('/static/data/device_soft_off.json?t='+Date.now()).then(function(r){return r.json()}).then(function(so){
+      for(var i=0;i<btns.length;i++){
+        var btn=btns[i];
+        btn.setAttribute('data-bound','1');
+        if(so[btn.dataset.dev]){btn.classList.add('off');}
+        else{btn.classList.remove('off');}
+        btn.onclick=function(e){
+          e.stopPropagation();
+          var dev=this.dataset.dev;
+          var next=this.classList.contains('off')?'false':'true';
+          var self=this;
+          fetch(TOGGLE_URL+'/device/'+dev+'?state='+next,{method:'POST'}).then(function(r){return r.json()}).then(function(d){
+            if(d[dev]){self.classList.add('off');}
+            else{self.classList.remove('off');}
+          });
+        };
+      }
+    }).catch(function(){});
+  }
+},1000);
+
+var HA_TOKEN='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI0ZTU1OTc3MGQ2MDA0ZTJiOGMwZGI5OTA3MGE2NTlkYiIsImlhdCI6MTcyMTAxNjI1NywiZXhwIjoyMDM2Mzc2MjU3fQ.NPtjYj1oL3jqC1iNI5YaHJKdFIAXKYhg6Y3DEsGlKF0';
+function toggleLight(eid){
+  fetch('/api/toggle/light/'+encodeURIComponent(eid)+'/toggle',{method:'POST'});
+}
+function toggleRoomLights(rk,on){console.log("toggleRoomLights",rk,on);
+  var ldata=DATA.lights?DATA.lights.lights:null;
+  if(!ldata||!ldata[rk])return;
+  var service=on?'turn_on':'turn_off';
+  for(var li=0;li<ldata[rk].length;li++){
+    var l=ldata[rk][li];
+    if((on&&l.state!=='on')||(!on&&l.state==='on')){
+      fetch('/api/toggle/light/'+encodeURIComponent(l.id)+'/'+service,{method:'POST'});
+    }
+  }
+}
+function showLightPopup(rk){
+  var ldata=DATA.lights?DATA.lights.lights:null;
+  if(!ldata||!ldata[rk])return;
+  var lights=ldata[rk],name=ROOM_NAMES[rk]?ROOM_NAMES[rk].replace(/^[^\u4e00-\u9fa5]+/,''):rk;
+  var html='<div class="ep-card"><div class="ep-hdr"><h2>💡 '+name+' 灯光</h2><button class="ep-close" onclick="this.closest(\'.energy-popup\').remove()">✕</button></div>';
+  html+='<div style="display:flex;gap:4px;margin-bottom:10px"><span onclick="toggleRoomLights(\''+rk+'\',true);setTimeout(function(){document.querySelector(\'.energy-popup\').remove();},300);" style="cursor:pointer;font-size:11px;color:#3fb950;background:rgba(63,185,80,.1);border:1px solid #3fb950;border-radius:3px;padding:3px 8px">全开</span><span onclick="toggleRoomLights(\''+rk+'\',false);setTimeout(function(){document.querySelector(\'.energy-popup\').remove();},300);" style="cursor:pointer;font-size:11px;color:#f85149;background:rgba(248,81,73,.1);border:1px solid #f85149;border-radius:3px;padding:3px 8px">全关</span></div>';
+  html+='<div style="display:flex;flex-wrap:wrap;gap:6px">';
+  for(var li=0;li<lights.length;li++){
+    var l=lights[li];
+    html+='<div style="display:flex;align-items:center;gap:6px;background:#0d1117;border:1px solid #21262d;border-radius:4px;padding:5px 10px;font-size:10px;color:#8b949e;min-width:100px;justify-content:space-between"><span style="font-size:9px;color:#484f58">'+l.name.replace('light.','').replace(/_/g,' ').replace(/yeelink cn|ml9 s 2|ml1 s 2|lemesh cn|wy0c\d+|linp cn/i,'').substring(0,18).trim()+'</span><span onclick="toggleLight(\''+l.id+'\')" style="cursor:pointer;font-size:14px;color:'+(l.state=='on'?'#d29922':'#484f58')+'">'+(l.state=='on'?'●':'○')+'</span></div>';
+  }
+  html+='</div></div>';
+  var pop=document.createElement('div');pop.className='energy-popup open';pop.style.cssText='display:flex!important;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:999;justify-content:center;align-items:center';
+  pop.innerHTML=html;
+  pop.addEventListener('click',function(e){if(e.target===pop)pop.remove();});
+  document.body.appendChild(pop);
+}
+
+async function load(){
+try{
+var files=['room_state','env_quality','device_protection','external_env','room_mode','energy_stats','lights','climate_intent'];
+var fetched={};
+for(var i=0;i<files.length;i++){
+var f=files[i];
+var res=await fetch('/static/data/state_'+f+'.json?t='+Date.now());
+fetched[f]=res.ok?await res.json():null;
+}
+DATA=fetched;
+renderAll();
+document.getElementById('status').innerHTML='✅ '+new Date().toLocaleTimeString('zh-CN');
+}catch(e){
+document.getElementById('status').innerHTML='⚠️ '+e.message;
+}
+}
+
+function renderAll(){
+if(DATA.room_state&&DATA.env_quality&&DATA.device_protection) renderRooms(DATA.room_state,DATA.env_quality,DATA.device_protection);
+if(DATA.external_env) renderExt(DATA.external_env);
+}
+
+var LABELS={empty:'🚪 无人',entering:'🚶 有人进入',occupied:'👤 有人活动',sleeping:'😴 睡觉',napping:'💤 午休',resting:'🛋️ 休息',waking_up:'🌅 起床',watching_movie:'🎬 看电影',using_computer:'💻 用电脑',watching_tv:'📺 看电视',chaxi:'🍵 茶歇',showering:'🚿 洗澡',washing:'🪥 洗漱',idle:'🚪 无人',unknown:'❓'};
+var ROOM_NAMES={br:'🛏️ 主卧',st:'📚 书房',bath:'🚿 主卫',lr:'🛋️ 客厅',dr:'🍽️ 餐厅',sb:'🛏️ 南次卧',nb:'🛏️ 北次卧',kt:'🍳 厨房',cr:'🚶 走廊',en:'🚪 玄关',gb:'🚿 客卫'};
+var ALL_STATES={br:['empty','entering','occupied','sleeping','napping','resting','waking_up'],st:['empty','entering','watching_movie','using_computer','occupied'],bath:['empty','entering','occupied'],lr:['empty','entering','occupied','watching_tv','chaxi'],dr:['empty','entering','occupied'],sb:['empty','entering','occupied'],nb:['empty','entering','occupied'],kt:['empty','entering','occupied'],cr:['empty','entering','occupied'],en:['empty','entering','occupied'],gb:['empty','entering','occupied']};
+
+function renderRooms(rs,env,devp){
+var roomDevs={br:{ac:'br_ac'},lr:{ac:'lr_ac'},dr:{ac:'dr_ac'},st:{ac:'st_ac'},nb:{ac:'nb_ac'},sb:{ac:'sb_ac'},bath:{dehum:'br_dehum'},gb:{dehum:'gb_dehum',exhaust:'gb_exhaust'},kt:{exhaust:'kitchen_exhaust'}};
+var rooms=env.rooms||{},devs=devp.devices||{},html='';
+var keys=Object.keys(rooms);
+keys.sort(function(a,b){
+  var ra=rooms[a],rb=rooms[b];
+  var activeA=ra.activity!=='empty'&&ra.activity!=='idle'&&!Array.isArray(ra.activity)?true:(Array.isArray(ra.activity)?!(ra.activity.length===1&&(ra.activity[0]==='empty'||ra.activity[0]==='idle')):false);
+  var activeB=rb.activity!=='empty'&&rb.activity!=='idle'&&!Array.isArray(rb.activity)?true:(Array.isArray(rb.activity)?!(rb.activity.length===1&&(rb.activity[0]==='empty'||rb.activity[0]==='idle')):false);
+  // 有人优先
+  if(activeA!==activeB)return activeA?-1:1;
+  // 同类型按状态变化时间排序：持续时间越短（最近变的）越靠前
+  var durA=ra.duration||999;
+  var durB=rb.duration||999;
+  return durA-durB;
+});
+
+var ri={br:'🛏',st:'📚',lr:'🛋',dr:'🍽',sb:'🛏',nb:'🛏',bath:'🚿',gb:'🚿',kt:'🍳',cr:'🚶',en:'🚪'};
+var sev={'过热':'bad','过冷':'bad','过湿':'bad','过干':'bad','空气污浊':'bad','不舒适':'bad','跑温':'bad','偏热':'warn','偏冷':'warn','偏湿':'warn','偏干':'warn','舒适':'ok'};
+function badgeEmo(st){
+if(st.indexOf('热')>=0)return '🥵';if(st.indexOf('冷')>=0)return '🥶';
+if(st.indexOf('湿')>=0)return '🌫';if(st.indexOf('干')>=0)return '🌵';
+if(st==='舒适')return '✅';if(st==='不舒适')return '⚠';if(st==='跑温')return '🌡';if(st==='空气污浊')return '😷';
+return '';
+}
+var actStyle={
+sleeping:{icon:'😴',cls:'occ',txt:'睡觉中'},napping:{icon:'💤',cls:'occ',txt:'午休'},
+resting:{icon:'🛋',cls:'occ',txt:'休息'},occupied:{icon:'👤',cls:'occ',txt:'有人活动'},
+using_computer:{icon:'💻',cls:'occ',txt:'用电脑'},watching_tv:{icon:'📺',cls:'occ',txt:'看电视'},
+watching_movie:{icon:'🎬',cls:'occ',txt:'看电影'},chaxi:{icon:'🍵',cls:'occ',txt:'茶歇'},
+entering:{icon:'🚶',cls:'entering',txt:'有人进入'},waking_up:{icon:'🌅',cls:'entering',txt:'起床中'},
+showering:{icon:'🚿',cls:'occ',txt:'洗澡'},washing:{icon:'🪥',cls:'occ',txt:'洗漱'},
+empty:{icon:'🚪',cls:'empty',txt:'无人'},idle:{icon:'🚪',cls:'empty',txt:'无人'},unknown:{icon:'❓',cls:'empty',txt:'未知'}
+};
+function svgIcon(emo,sz){return '<svg class="emo" viewBox="0 0 24 24" style="width:'+(sz||14)+'px;height:'+(sz||14)+'px">'+(IC[emo]||IC['❓'])+'</svg>';}
+function actLabel(act){
+if(Array.isArray(act)){if(act.length===0)act=['unknown'];return act.map(actLabel).join(' ');}
+var a=actStyle[act]||{icon:'❓',cls:'empty',txt:act};
+return '<span class="sc-state '+a.cls+'">'+svgIcon(a.icon)+' '+a.txt+'</span>';
+}
+
+var devIcons={'ac':'❄','dehum':'💧','exhaust':'💨','fresh':'💨'};
+var devTypeColors={ac:'rgba(88,166,255,0.35)',dehum:'rgba(63,185,80,0.3)',exhaust:'rgba(210,168,255,0.35)',fresh:'rgba(210,153,34,0.3)'};
+var devNames2={'br_ac':'主卧空调','lr_ac':'客厅空调','dr_ac':'餐厅空调','st_ac':'书房空调','nb_ac':'北次卧空调','sb_ac':'南次卧空调','br_dehum':'主卫除湿','laundry_dehum':'洗衣房除湿','gb_dehum':'客卫除湿','kitchen_exhaust':'厨房排气','gb_exhaust':'客卫排气','fresh_air':'全屋新风'};
+
+function devRow(id,iconKey){
+var s=devs[id];if(!s)return'';
+var isExh=id.indexOf('exhaust')>=0,isDehum=id.indexOf('dehum')>=0,isFresh=id==='fresh_air';
+var icon=devIcons[iconKey]||'❓';
+var badges='';
+if(!isDehum&&!isExh&&!isFresh){
+var lcIcons={'带载中':'⚡','已卸载':'✅','待机':'⏸','未知':'❓'};
+var lcCls={'带载中':'warn','已卸载':'ok','待机':'info','未知':'info'};
+var loadLabel=s.compressor_load||'未知';if(loadLabel==='已停止')loadLabel='待机';
+badges+='<span class="sc-badge '+lcCls[loadLabel]+'">'+svgIcon(lcIcons[loadLabel]||'',11)+loadLabel+'</span>';
+var roomKey=id.replace('_ac','');
+var rm=DATA.room_mode&&DATA.room_mode.modes?DATA.room_mode.modes[roomKey]:null;
+var mode=rm||'舒适';
+if(mode==='节能')badges+='<span class="sc-badge ok">'+svgIcon('🍃',11)+'节能</span>';
+var ts=parseInt(Date.now()/1000);
+if(s.restart_blocked||s.min_runtime_active){
+var end=s.protection_ends_at||0;if(!window._devProt)window._devProt={};window._devProt[id]=end;
+}else{if(!window._devProt)window._devProt={};window._devProt[id]=0;}
+var parts=[];
+if(s.ac_set_temp!=null)parts.push('设定'+s.ac_set_temp+'°C');
+if(s.ac_cur_temp!=null)parts.push('回风'+s.ac_cur_temp+'°C');
+var modeMap={cool:'制冷',dry:'除湿',heat:'制热',fan_only:'送风'};
+if(s.climate_state)parts.push(modeMap[s.climate_state]||s.climate_state);
+var nextAct=(s.next_action||'').replace('开机','调模式').replace('已开机','已调模式');
+if(nextAct&&nextAct!=='无')parts.push('⏭ '+nextAct);
+return'<div style="font-weight:600;color:#c9d1d9;margin-bottom:3px">'+svgIcon(icon,12)+' '+(devNames2[id]||id)+'<button class="dev-soft-btn dev-toggle" data-dev="'+id+'" title="智能开关">⏻</button></div><div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:2px">'+badges+'</div><div style="color:#8b949e;font-size:10px">'+parts.join(' · ')+'</div>';
+}
+if(isDehum){
+var sw=s.switch||'off';
+badges+='<span class="sc-badge '+(sw==='on'?'ok':'info')+'">'+svgIcon(sw==='on'?'💧':'⏸',11)+(sw==='on'?'运行中':'待机')+'</span>';
+var dp=[];if(s.dehum_set_humidity!=null)dp.push('设定'+s.dehum_set_humidity+'%');if(s.dehum_cur_humidity!=null)dp.push('当前'+s.dehum_cur_humidity+'%');
+return'<div style="font-weight:600;color:#c9d1d9;margin-bottom:3px">'+svgIcon(icon,12)+' '+(devNames2[id]||id)+'<button class="dev-soft-btn dev-toggle" data-dev="'+id+'" title="智能开关">⏻</button></div><div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:2px">'+badges+'</div><div style="color:#8b949e;font-size:10px">'+dp.join(' · ')+'</div>';
+}
+if(isExh||isFresh){
+var fSw=s.switch||'off';
+var on=fSw!=='off'&&fSw!==''&&fSw!=='unavailable';
+badges+='<span class="sc-badge '+(on?'ok':'info')+'">'+svgIcon(on?'💨':'⏸',11)+(on?'运行中':'待机')+'</span>';
+return'<div style="font-weight:600;color:#c9d1d9;margin-bottom:3px">'+svgIcon(icon,12)+' '+(devNames2[id]||id)+'<button class="dev-soft-btn dev-toggle" data-dev="'+id+'" title="智能开关">⏻</button></div><div style="display:flex;flex-wrap:wrap;gap:2px">'+badges+'</div>';
+}
+return'';
+}
+
+for(var ki=0;ki<keys.length;ki++){
+var r=keys[ki];
+if(!ROOM_NAMES[r])continue;
+var es=rooms[r],act=es.activity,first=Array.isArray(act)?(act[0]||'unknown'):act;
+var title=ROOM_NAMES[r].replace(/^[^\u4e00-\u9fa5]+/,'');
+var cond=es.condition||[];if(!Array.isArray(cond))cond=[cond];
+var comfort=(es.comfort||'').replace('不适宜','不舒适').replace('适宜','舒适');
+var rd=es.readings||{},parts=[];
+if(rd.temp!=null)parts.push(rd.temp+'°C');
+var _int=(DATA.climate_intent&&DATA.climate_intent.intents)?DATA.climate_intent.intents[r]:null;
+var _tgt=(_int&&_int.comfort_target!=null)?_int.comfort_target:null;
+if(rd.at!=null){
+if(_tgt!=null){
+var _d=Math.round((rd.at-_tgt)*100)/100,_c;
+if(_d>0.5)_c='#f85149';else if(_d>0)_c='#d29922';else if(_d>=-0.5)_c='#3fb950';else _c='#58a6ff';
+parts.push('体感<b style="color:'+_c+';font-weight:600">'+rd.at+'°C</b>→目标'+_tgt+'°C');
+}else{parts.push('体感'+rd.at+'°C');}
+}else if(_tgt!=null){parts.push('目标'+_tgt+'°C');}
+if(rd.hum!=null)parts.push(rd.hum+'%');
+if(rd.co2!=null)parts.push('CO₂'+rd.co2);
+var envBadges='';
+if(comfort){var clv=sev[comfort]||'info';envBadges+='<span class="sc-badge '+clv+'" style="min-width:58px;justify-content:center">'+svgIcon(badgeEmo(comfort),11)+comfort+'</span>';}
+for(var ci=0;ci<cond.length;ci++){
+if(cond[ci]==='舒适'||cond[ci]==='不适宜'||cond[ci]==='不舒适')continue;
+var lv=sev[cond[ci]]||'info';
+envBadges+='<span class="sc-badge '+lv+'">'+svgIcon(badgeEmo(cond[ci]),11)+cond[ci]+'</span>';
+}
+var rsr=rs&&rs.rooms?rs.rooms[r]:null;
+var act2=rsr?rsr.activity:act;
+html+='<div class="card" style="margin-bottom:8px;display:flex;gap:10px;align-items:flex-start;position:relative"><span style="position:absolute;top:8px;right:8px;cursor:pointer;color:#d2a8ff" onclick="event.stopPropagation();showRoomData(\''+r+'\')"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="3" y="13" width="4" height="8" rx="1" fill="#d2a8ff"/><rect x="10" y="8" width="4" height="13" rx="1" fill="#d2a8ff"/><rect x="17" y="5" width="4" height="16" rx="1" fill="#d2a8ff" opacity=".6"/></svg></span>';
+html+='<div class="room-info" style="min-width:0">';
+html+='<div class="sc-title">'+svgIcon(ri[r]||'❓',14)+' '+title+' <span style="color:#8b949e;font-weight:400;font-size:11px">'+parts.join(' · ')+'</span></div>';
+html+=actLabel(act2);
+// 停留时间
+var dur=rsr?rsr.duration:0;
+if(dur>0)html+=' <span style="font-size:10px;color:#484f58;font-weight:400">'+dur+'分钟</span>';
+if(envBadges)html+='<div style="margin-top:3px">'+envBadges+'</div>';
+var reason=rsr?rsr.reason:es.reason||'';
+if(reason)html+='<div class="sc-info">'+reason+'</div>';
+html+='</div>';
+// 右侧设备
+var rdv=roomDevs[r];
+if(rdv){
+var devHtml='';
+for(var dk in rdv){var did=rdv[dk];var dr=devRow(did,dk);if(dr)devHtml+='<div class="dev-box" style="border:1px solid '+(devTypeColors[dk]||'#30363d')+'">'+dr+'</div>';}
+if(devHtml)html+='<div style="display:flex;gap:6px;flex-wrap:wrap">'+devHtml+'</div>';
+}
+// 💡 灯光卡
+var ldata=DATA.lights?DATA.lights.lights:null;
+if(ldata&&ldata[r]&&ldata[r].length>0){
+  var lights=ldata[r],onCount=0;
+  for(var li=0;li<lights.length;li++){if(lights[li].state=='on')onCount++;}
+  var lOn=onCount>0;
+  var tc=lOn?'#3fb950':'#f85149';
+  var bg=lOn?'rgba(63,185,80,.1)':'rgba(248,81,73,.1)';
+  html+='<div style="display:flex;gap:6px;flex-wrap:wrap"><div class="dev-box" style="border:1px solid rgba(210,153,34,0.3);cursor:pointer;position:relative;width:auto;min-width:70px;padding:4px 8px;font-size:10px;" onclick="showLightPopup(\''+r+'\')">';
+  html+='<button style="position:absolute;top:4px;right:4px;background:'+bg+';border:1px solid '+tc+';color:'+tc+';cursor:pointer;font-size:9px;padding:0 5px;border-radius:3px;line-height:16px;font-weight:bold" onclick="event.stopPropagation();var on='+lOn+';toggleRoomLights(\''+r+'\',!on);var b=this;var t='+tc+';b.style.color=t;b.style.borderColor=t;setTimeout(function(){load();},800);">⏻</button>';
+  html+='<div style="font-weight:600;color:#c9d1d9;margin-bottom:3px;padding-right:22px">💡 灯光</div>';
+  html+='<div style="font-size:10px;color:'+(lOn?'#d29922':'#8b949e')+'">'+onCount+'/'+lights.length+' 开</div></div></div>';
+}
+html+='</div>';
+}
+
+// 先插入隐藏容器，测量房间信息宽度，统一对齐
+var tmpHtml='<div id="_tmp_rooms" style="position:absolute;visibility:hidden;max-width:'+document.getElementById('room-devices').offsetWidth+'px">'+EMO(html)+'</div>';
+document.getElementById('room-devices').innerHTML=tmpHtml;
+var riDivs=document.querySelectorAll('#_tmp_rooms .room-info');
+var maxW=0;
+for(var mi=0;mi<riDivs.length;mi++){var w=riDivs[mi].offsetWidth;if(w>maxW)maxW=w;}
+for(var mj=0;mj<riDivs.length;mj++){riDivs[mj].style.minWidth=maxW+'px';}
+// 取调整后的 HTML，追加其他设备后写入
+var finalHtml=document.getElementById('_tmp_rooms').innerHTML;
+var otherDevs=[{id:'laundry_dehum',icon:'👕',label:'洗衣房除湿',key:'dehum'},{id:'fresh_air',icon:'💨',label:'全屋新风',key:'fresh'}];
+var otherHtml='';
+for(var oi=0;oi<otherDevs.length;oi++){
+var od=otherDevs[oi];var dr2=devRow(od.id,od.key);
+if(dr2)otherHtml+='<div class="card" style="margin-bottom:8px"><div style="display:flex;gap:10px;align-items:flex-start"><div style="flex:1;min-width:0"><div class="sc-title">'+svgIcon(od.icon,14)+' '+od.label+'</div></div><div style="flex-shrink:0"><div class="dev-box" style="border:1px solid rgba(210,168,255,0.3)">'+dr2+'</div></div></div></div>';
+}
+if(otherHtml)finalHtml+='<div style="border-top:1px solid #30363d;margin-top:6px;padding-top:4px;font-size:11px;color:#8b949e">🔌 其他设备</div>'+otherHtml;
+document.getElementById('room-devices').innerHTML=finalHtml;
+updateCountdowns();
+}
+
+function renderExt(d){
+window._ext=d;
+renderWeatherPanel();
+}
+
+
+function updateCountdowns(){
+var ts=parseInt(Date.now()/1000);
+for(var id in window._devProt||{}){
+var end=window._devProt[id];
+if(!end)continue;
+var rem=Math.max(0,end-ts);
+var mm=Math.floor(rem/60),ss=rem%60;
+var el=document.getElementById('cd_'+id);
+if(el)el.textContent=mm+'分'+ss+'秒';
+}
+}
+
+setInterval(updateCountdowns,1000);
+load();
+
+// ═══ 摄像头面板（左右抽屉 + 7路 + 全屏点击）═══
+(function(){
+// CSS
+var s=document.createElement('style');s.textContent=
+'.cam-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-content:start}'+
+'@media(orientation:portrait){.cam-cards{grid-template-columns:1fr 1fr}}'+
+'.cam-card{background:#161b22;border:1px solid #30363d;border-radius:8px;position:relative;overflow:hidden;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:manipulation}'+
+'.cam-card img,.cam-card video{width:100%;height:100%;object-fit:contain}'+
+'.cam-card .cam-lbl{position:absolute;bottom:4px;left:4px;background:rgba(0,0,0,.75);color:#c9d1d9;font-size:10px;padding:2px 7px;border-radius:3px;z-index:2}'+
+'.cam-card .cam-err{color:#484f58;font-size:13px}'+
+'.cam-full{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:50;background:rgba(0,0,0,.95);display:flex;align-items:center;justify-content:center;flex-direction:column}'+
+'.cam-full img{max-width:100vw;max-height:calc(100vh - 50px);object-fit:contain}'+
+'.cam-close-btn{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.6);border:1px solid #30363d;color:#c9d1d9;padding:6px 14px;border-radius:6px;font-size:13px;cursor:pointer;z-index:51}'+
+'.cam-close-btn:hover{background:rgba(248,81,73,.3)}'+
+'.drawer-panel{flex:0 0 100vw;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;scroll-snap-align:start;padding:12px}'+
+'.drawer-panel::-webkit-scrollbar{display:none}'+
+'.env-swipe{font-size:10px;color:#484f58;text-align:right;margin-top:2px}'+
+'/* 空调控制开关 */'+
+'.ac-ctrl-item{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #21262d}'+
+'.ac-ctrl-item .ac-name{font-size:13px;color:#c9d1d9;display:flex;align-items:center;gap:6px}'+
+'.ac-ctrl-item .ac-name .emo{width:14px;height:14px}'+
+'.ac-ctrl-toggle{width:44px;height:24px;border-radius:12px;border:none;cursor:pointer;transition:all .2s;background:#30363d;position:relative}'+
+'.ac-ctrl-toggle::after{content:\"\";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#c9d1d9;transition:left .2s}'+
+'.ac-ctrl-toggle.on{background:#3fb950}'+
+'.ac-ctrl-toggle.on::after{left:22px;background:#fff}'+
+'.dev-soft-btn{background:rgba(63,185,80,.1);border:1px solid #3fb950;color:#3fb950;cursor:pointer;font-size:11px;padding:1px 8px;border-radius:4px;font-weight:bold;transition:all .2s}'+
+'.dev-soft-btn:hover{opacity:.8}'+
+'.dev-soft-btn.off{color:#f85149;border-color:#f85149;background:rgba(248,81,73,.1)}';
+document.head.appendChild(s);
+
+// ═══ 抽屉布局 + 宽屏适配 ═══
+(function setupDrawer(){
+var cg=document.querySelector('.container-grid');
+if(!cg)return;
+function applyPortrait(){
+// 天气移回左面板
+var weather=document.getElementById('weather-panel');
+var left=document.querySelector('.drawer-panel');
+if(weather&&weather.parentNode===cg&&left){
+  left.insertBefore(weather, left.firstChild);
+  weather.style.width='';weather.style.flex='';weather.style.flexWrap='';
+}
+// 把所有东西从 _land_row 移回 container-grid
+var row=document.getElementById('_land_row');
+if(row){
+  while(row.firstChild){cg.appendChild(row.firstChild);}
+  row.remove();
+}
+// 恢复 cam-cards 到 container-grid
+var camPanel=document.getElementById('cam-cards');
+if(camPanel&&camPanel.parentNode!==cg){cg.appendChild(camPanel);}
+cg.style.display='flex';cg.style.overflowX='scroll';cg.style.overflowY='visible';
+cg.style.scrollSnapType='x mandatory';cg.style.gap='0';cg.style.width='100vw';
+cg.style.maxWidth='100vw';cg.style.maxHeight='';cg.style.gridTemplateColumns='';
+cg.style.marginTop='36vh';cg.style.padding='0';cg.style.flexDirection='';cg.style.alignItems='';cg.style.gridAutoRows='';
+var ct=document.querySelector('.container');if(ct){ct.style.maxWidth='100vw';ct.style.margin='0';}
+var dps=document.querySelectorAll('.drawer-panel');
+for(var di=0;di<dps.length;di++){var dp=dps[di];dp.style.flex='0 0 100vw';dp.style.overflowY='auto';dp.style.scrollSnapAlign='start';dp.style.display='';}
+var cam=document.getElementById('cam-cards');if(cam){cam.style.gridTemplateColumns='1fr 1fr 1fr';cam.style.maxHeight='';}
+var g4=document.querySelector('.grid4');if(g4){g4.style.gridTemplateColumns='repeat(3,1fr)';}
+var rd=document.getElementById('room-devices');if(rd){rd.style.gridColumn='1/-1';rd.style.gridRow='';}
+// 竖屏时停止摄像头（由滚动事件接管管理）
+if(camTimer){clearInterval(camTimer);camTimer=null;}
+}
+function applyLandscape(){
+var weather=document.getElementById('weather-panel');
+// 1. 天气提取到顶层全宽
+if(weather&&weather.parentNode!==cg){cg.appendChild(weather);}
+weather.style.width='100%';weather.style.flex='none';weather.style.flexWrap='nowrap';weather.style.display='flex';
+
+// 2. container-grid：flex column（天气 + 数据监控）
+cg.style.display='flex';cg.style.flexDirection='column';
+cg.style.overflowX='visible';cg.style.overflowY='auto';
+cg.style.scrollSnapType='none';cg.style.gap='10px';
+cg.style.width='100%';cg.style.maxWidth='100%';
+cg.style.maxHeight='';cg.style.marginTop='38vh';cg.style.padding='12px';
+
+// 3. 中排：左数据 + 右监控
+var dps=document.querySelectorAll('.drawer-panel');
+var camPanel=document.getElementById('cam-cards');
+var existed=document.getElementById('_land_row');
+if(!existed){
+  existed=document.createElement('div');existed.id='_land_row';
+  existed.style.cssText='display:flex;gap:10px;flex:1;min-height:0;align-items:flex-start';
+  cg.appendChild(existed);
+}
+var nodes=[];
+for(var di=0;di<dps.length;di++){
+  if(!dps[di].classList.contains('ac-ctrl-panel')){nodes.push(dps[di]);}
+  else{dps[di].style.display='none';}
+}
+if(camPanel)nodes.push(camPanel);
+// 只追加尚未在 _land_row 里的节点（不清空）
+for(var ni=0;ni<nodes.length;ni++){
+  if(nodes[ni].parentNode!==existed)existed.appendChild(nodes[ni]);
+}
+if(nodes.length>0){
+  nodes[0].style.flex='1';nodes[0].style.width='';
+  nodes[0].style.maxHeight='';nodes[0].style.overflowY='visible';
+  nodes[0].style.scrollSnapAlign='none';
+}
+if(camPanel){
+  camPanel.style.display='grid';camPanel.style.flex='1';camPanel.style.width='';
+  camPanel.style.gridTemplateColumns='1fr 1fr';camPanel.style.overflowY='visible';
+  camPanel.style.gridAutoRows='auto';camPanel.style.alignContent='start';
+}
+// 把 footer 移到 grid4 内作为全宽底行（不移出页面）
+var footer=document.querySelector('.grid4 > [style*=\"grid-column:1/-1\"]:not(#room-devices)');
+if(footer){
+  footer.style.cssText='grid-column:1/-1;text-align:center;margin-top:8px;padding:0;background:none;border:none';
+  if(footer.querySelector('span'))footer.querySelector('span').style.cssText='cursor:pointer;font-size:12px;color:#8b949e;padding:4px 12px;border-radius:6px;display:inline-block;background:#161b22;border:1px solid #30363d';
+}
+var g4=document.querySelector('.grid4');if(g4)g4.style.gridTemplateColumns='1fr';
+var rd=document.getElementById('room-devices');if(rd)rd.style.gridColumn='';
+// 横屏时强制启动摄像头刷新
+if(!camTimer){refreshCams();camTimer=setInterval(refreshCams,3000);}
+}
+function check(){if(window.innerWidth>=900&&window.matchMedia('(orientation:landscape)').matches)applyLandscape();else applyPortrait();}
+window.addEventListener('resize',check);
+var left=document.createElement('div');left.className='drawer-panel';
+while(cg.firstChild&&cg.firstChild.id!=='cam-cards'){left.appendChild(cg.firstChild);}
+cg.appendChild(left);
+// 抽屉创建完成后，等其余面板就绪再检查横竖屏
+setTimeout(check, 200);
+})();
+
+// Camera cards as right drawer panel — 7 cams, 3-col grid
+var camLabels=['门口','客厅','储藏室','电梯厅','玄关','餐厅','3D打印'];
+var camHTML='<div class="drawer-panel cam-cards" id="cam-cards">';
+for(var i=0;i<7;i++){
+camHTML+='<div class="cam-card"><div class="cam-err" id="cam'+i+'-err">加载中…</div><img id="cam'+i+'-img" style="display:none"><span class="cam-lbl">'+camLabels[i]+'</span></div>';
+}
+camHTML+='</div>';
+var div=document.createElement('div');div.innerHTML=camHTML;
+var cg=document.querySelector('.container-grid');
+if(cg)cg.appendChild(div.firstElementChild);
+
+// ── 空调控制面板（第三屏，右划拉出）──
+var acHTML='<div class="drawer-panel ac-ctrl-panel" id="ac-ctrl-panel">'+
+'<h2 style="font-size:16px;color:#58a6ff;margin-bottom:12px">🔌 空调控制</h2>'+
+'<div id="ac-ctrl-list"></div>'+
+'<div style="font-size:10px;color:#484f58;margin-top:12px">开关关闭后温控程序暂停，物理关机</div>'+
+'</div>';
+var acDiv=document.createElement('div');acDiv.innerHTML=acHTML;
+if(cg)cg.appendChild(acDiv.firstElementChild);
+
+// Camera config — 7 channels via go2rtc
+var CAM_BASE='/api/toggle/cam';
+var ENC=encodeURIComponent;
+var camSrcs=['NVR_CH2','NVR_CH3','NVR_CH4','NVR_CH5','NVR_CH6','NVR_CH7','P1S'];
+var cams=[];
+for(var i=0;i<7;i++){
+cams.push({img:'cam'+i+'-img',err:'cam'+i+'-err',src:camSrcs[i]});
+}
+var camTimer=null;
+function refreshCams(){
+for(var i=0;i<cams.length;i++){(function(idx){
+var c=cams[idx];
+var img=document.getElementById(c.img),err=document.getElementById(c.err);
+if(!img)return;
+// P1S uses local snapshot (cam_snapper direct HA fetch)
+var url=c.src==='P1S'?'/static/cams/p1s.jpg?t='+Date.now():CAM_BASE+'/api/frame.jpeg?src='+ENC(c.src)+'&t='+Date.now();
+if(img.src===url)return;
+img.onload=function(){this.style.display='';if(err)err.style.display='none';};
+img.onerror=function(){this.style.display='none';if(err)err.style.display='';};
+img.src=url;
+})(i);}
+}
+
+function openCams(){
+var cg=document.querySelector('.container-grid');
+if(cg)cg.scrollTo({left:cg.clientWidth,behavior:'smooth'});
+refreshCams();
+if(!camTimer)camTimer=setInterval(refreshCams,3000);
+}
+function closeCams(){
+var cg=document.querySelector('.container-grid');
+if(cg)cg.scrollTo({left:0,behavior:'smooth'});
+if(camTimer){clearInterval(camTimer);camTimer=null;}
+}
+
+// Tap camera card → full screen
+for(var i=0;i<cams.length;i++){(function(idx){
+var img=document.getElementById(cams[idx].img);
+var card=img?img.parentNode:null;
+if(!card)return;
+card.addEventListener('click',function(e){
+e.stopPropagation();
+var div=document.createElement('div');
+div.className='cam-full';
+div.innerHTML='<button class="cam-close-btn" onclick="this.parentNode.remove();if(camTimer)camTimer=setInterval(refreshCams,3000);">✕ 关闭</button><img id="cam-full-img" src="">';
+document.body.appendChild(div);
+var fi=document.getElementById('cam-full-img');
+function upd(){fi.src=cams[idx].src==='P1S'?'/static/cams/p1s.jpg?t='+Date.now():CAM_BASE+'/api/frame.jpeg?src='+ENC(cams[idx].src)+'&t='+Date.now();}
+upd();
+var t=setInterval(upd,3000);
+if(camTimer){clearInterval(camTimer);camTimer=null;}
+div.addEventListener('click',function(ev){if(ev.target===div){clearInterval(t);div.remove();if(!camTimer)camTimer=setInterval(refreshCams,3000);}});
+});
+})(i);}
+
+// Auto-start cameras when scrolled into view
+var cg2=document.querySelector('.container-grid');
+if(cg2){
+cg2.addEventListener('scroll',function(){
+var onCam=cg2.scrollLeft>cg2.clientWidth*0.6 && cg2.scrollLeft<cg2.clientWidth*1.5;
+if(onCam&&!camTimer){refreshCams();camTimer=setInterval(refreshCams,3000);}
+else if(!onCam&&camTimer){clearInterval(camTimer);camTimer=null;}
+});
+}
+
+// Swipe on env-quality → 三屏切换（主面板 / 摄像头 / 空调控制）
+var envCard=document.getElementById('env-quality');
+if(envCard&&envCard.parentElement){
+var startX=0;
+envCard.parentElement.addEventListener('touchstart',function(e){startX=e.touches[0].clientX;});
+envCard.parentElement.addEventListener('touchend',function(e){
+var dx=startX-e.changedTouches[0].clientX;
+var cg=document.querySelector('.container-grid');
+if(cg&&Math.abs(dx)>50){
+var w=cg.clientWidth;
+var panel=Math.round(cg.scrollLeft/w);
+var next=dx>50?Math.min(panel+1,2):Math.max(panel-1,0);
+cg.scrollTo({left:next*w,behavior:'smooth'});
+}
+});
+}
+})();
+
+// ═══ 能耗折线图弹窗 ═══
+(function(){
+var s=document.createElement('style');s.textContent=
+'.energy-popup{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:100;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center}'+
+'.energy-popup.open{display:flex}'+
+'.energy-popup .ep-card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:20px;width:92vw;max-width:960px;max-height:90vh;overflow-y:auto}'+
+'.energy-popup .ep-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}'+
+'.energy-popup .ep-hdr h2{font-size:16px;color:#58a6ff;margin:0}'+
+'.energy-popup .ep-close{background:none;border:1px solid #30363d;color:#8b949e;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:13px}'+
+'.energy-popup .ep-close:hover{color:#f85149;border-color:#f85149}'+
+'.ep-periods{display:flex;gap:6px;margin-bottom:14px}'+
+'.ep-periods button{padding:4px 14px;border-radius:10px;font-size:12px;border:1px solid #30363d;background:#21262d;color:#8b949e;cursor:pointer;transition:all .2s}'+
+'.ep-periods button:hover{color:#c9d1d9;border-color:#58a6ff}'+
+'.ep-periods button.active{background:#1b3a1b;color:#3fb950;border-color:#3fb950;font-weight:600}'+
+'.ep-chart-wrap{position:relative;height:380px;margin-bottom:8px}'+
+'.ep-chart-wrap canvas{width:100%!important;height:100%!important}'+
+'.ep-summary{font-size:12px;color:#8b949e;text-align:center}'+
+'.ep-summary span{color:#d2a8ff;font-weight:600}'+
+'.ep-legend{display:flex;flex-wrap:wrap;gap:6px;padding:8px 0}'+
+'.ep-leg-item{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;cursor:pointer;font-size:11px;color:#c9d1d9;transition:all .2s;user-select:none}'+
+'.ep-leg-item:hover{background:rgba(88,166,255,0.08)}'+
+'.ep-leg-item.dim{color:#484f58;opacity:.45}'+
+'.ep-leg-item.dim:hover{opacity:.7}'+
+'.ep-leg-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}'+
+'.ep-leg-label{white-space:nowrap}'+
+'.ep-leg-item .emo{width:12px;height:12px}'+
+'/* 待机分析热力图 */'+
+'.sb-popup{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:100;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center}'+
+'.sb-popup.open{display:flex}'+
+'.sb-popup .sb-card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:16px;width:92vw;max-width:900px;max-height:85vh;overflow-y:auto}'+
+'.sb-popup .sb-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}'+
+'.sb-popup .sb-hdr h2{font-size:16px;color:#58a6ff;margin:0}'+
+'.sb-popup .sb-close{background:none;border:1px solid #30363d;color:#8b949e;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:13px}'+
+'.sb-popup .sb-close:hover{color:#f85149;border-color:#f85149}'+
+'.sb-wd-toggle{display:flex;gap:6px;margin-bottom:10px}'+
+'.sb-wd-toggle button{padding:3px 12px;border-radius:10px;font-size:11px;border:1px solid #30363d;background:#21262d;color:#8b949e;cursor:pointer}'+
+'.sb-wd-toggle button.active{background:#1b3a1b;color:#3fb950;border-color:#3fb950;font-weight:600}'+
+'.sb-grid{display:grid;gap:1px;font-size:10px}'+
+'.sb-row{display:contents}'+
+'.sb-cell{padding:3px 2px;text-align:center;border-radius:2px;cursor:default;min-width:22px;white-space:nowrap}'+
+'.sb-cell.hdr{color:#8b949e;font-weight:600;font-size:9px;position:sticky;top:0;background:#161b22;z-index:1}'+
+'.sb-cell.room{color:#c9d1d9;font-weight:600;text-align:left;padding-left:6px;white-space:nowrap;font-size:11px;position:sticky;left:0;background:#161b22;z-index:1}'+
+'.sb-cell.t15{background:#1b3a1b;color:#3fb950}'+
+'.sb-cell.t30{background:#3a2e1b;color:#d29922}'+
+'.sb-cell.t60{background:#3a201b;color:#f0883e}'+
+'.sb-cell.t120{background:#1b1f2a;color:#484f58}'+
+'.sb-cell.tnone{background:#0d1117;color:#30363d}'+
+'.sb-legend{display:flex;gap:10px;margin-top:8px;font-size:10px;color:#8b949e;align-items:center}'+
+'.sb-legend span{display:inline-flex;align-items:center;gap:3px}'+
+'.sb-legend .dot{width:10px;height:10px;border-radius:2px;display:inline-block}'+
+'.sb-legend .dot.d15{background:#3fb950}.sb-legend .dot.d30{background:#d29922}'+
+'.sb-legend .dot.d60{background:#f0883e}.sb-legend .dot.d120{background:#484f58}'+
+'/* 舒适计划 */'+
+'.pc-popup{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:100;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center}'+
+'.pc-popup.open{display:flex}'+
+'.pc-card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:16px;width:92vw;max-width:700px;max-height:85vh;overflow-y:auto}'+
+'.pc-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}'+
+'.pc-hdr h2{font-size:16px;color:#58a6ff;margin:0}'+
+'.pc-close{background:none;border:1px solid #30363d;color:#8b949e;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:13px}'+
+'.pc-close:hover{color:#f85149;border-color:#f85149}'+
+'.pc-table{width:100%;border-collapse:collapse;font-size:12px}'+
+'.pc-table th{color:#8b949e;font-weight:600;padding:6px 4px;border-bottom:1px solid #30363d;text-align:center;font-size:10px}'+
+'.pc-table td{padding:5px 4px;border-bottom:1px solid #21262d;text-align:center}'+
+'.pc-table td.room{color:#c9d1d9;font-weight:600;text-align:left;font-size:11px}'+
+'.pc-table td.has{color:#3fb950;font-weight:600}'+
+'.pc-table td.none{color:#484f58}'+
+'.pc-room-icon{display:inline-flex;align-items:center;gap:4px}'+
+'.pc-room-icon .emo{width:12px;height:12px}'+
+'.pc-note{font-size:10px;color:#484f58;margin-top:8px}';
+document.head.appendChild(s);
+})();
+
+(function(){
+var pop=document.createElement('div');pop.className='energy-popup';pop.id='energy-popup';
+pop.innerHTML='<div class="ep-card">'+
+'<div class="ep-hdr"><h2>⚡ 能耗统计</h2><button class="ep-close" onclick="closeEnergy()">✕</button></div>'+
+'<div class="ep-periods" id="ep-periods">'+
+'<button data-p="hour" class="active">分时</button>'+
+'<button data-p="day">日</button>'+
+'<button data-p="week">周</button>'+
+'<button data-p="month">月</button>'+
+'</div>'+
+'<div class="ep-chart-wrap"><canvas id="ep-chart"></canvas></div>'+
+'<div class="ep-summary" id="ep-summary"></div>'+
+'</div>';
+document.body.appendChild(pop);
+// 时段按钮事件
+document.getElementById('ep-periods').addEventListener('click',function(e){
+if(e.target.tagName!=='BUTTON')return;
+var btns=this.querySelectorAll('button');
+for(var i=0;i<btns.length;i++)btns[i].classList.remove('active');
+e.target.classList.add('active');
+renderEnergyChart(e.target.dataset.p);
+});
+})();
+
+var _energyChart=null;
+var DEV_COLORS=['#58a6ff','#3fb950','#d29922','#f85149','#d2a8ff','#79c0ff','#ff7b72','#a5d6ff','#56d364'];
+var DEV_NAMES={'br_ac':'主卧','st_ac':'书房','lr_ac':'客厅','dr_ac':'餐厅','nb_ac':'北次卧','sb_ac':'南次卧',
+'br_dehum':'主卫除湿','laundry_dehum':'洗衣房除湿','gb_dehum':'客卫除湿'};
+var DEV_ICONS={'br_ac':'🛏','st_ac':'📚','lr_ac':'🛋','dr_ac':'🍽','nb_ac':'🛏','sb_ac':'🛏',
+'br_dehum':'💧','laundry_dehum':'👕','gb_dehum':'💧'};
+
+function closeEnergy(){
+document.getElementById('energy-popup').classList.remove('open');
+}
+
+function showEnergyReport(){
+document.getElementById('energy-popup').classList.add('open');
+// 默认激活分时
+var btns=document.querySelectorAll('#ep-periods button');
+for(var i=0;i<btns.length;i++)btns[i].classList.remove('active');
+btns[0].classList.add('active');
+renderEnergyChart('hour');
+}
+
+function renderEnergyChart(period){
+fetch('/static/data/state_energy_history.json?t='+Date.now())
+.then(function(r){if(!r.ok)throw Error('HTTP '+r.status);return r.json();})
+.then(function(history){
+if(!history||!history.length){
+document.getElementById('ep-summary').innerHTML='暂无历史数据，至少需要运行5分钟后才有数据点';
+if(_energyChart){_energyChart.destroy();_energyChart=null;}
+return;
+}
+var now=parseInt(Date.now()/1000);
+// 聚合 + 构建 Chart.js 数据集
+var result=aggregateHistory(history,period,now);
+drawChart(result,period);
+})
+.catch(function(e){
+document.getElementById('ep-summary').innerHTML='加载失败: '+e.message;
+});
+}
+
+function aggregateHistory(history,period,now){
+// period: hour(今日分时), day(7日), week(4周), month(30日)
+var points=history; // [{ts, total_watts, devices:{id:{watts,runtime_sec}}}]
+var deviceIds={}; // 收集所有出现过的设备
+for(var i=0;i<points.length;i++){
+var devs=points[i].devices||{};
+for(var did in devs){deviceIds[did]=true;}
+}
+var dids=Object.keys(deviceIds);
+
+var buckets={},bucketLabels=[];
+var bucketSec,cutoff,bucketCount;
+
+if(period==='hour'){
+// 今日每小时
+var d=new Date();d.setHours(0,0,0,0);cutoff=parseInt(d.getTime()/1000);
+bucketSec=3600;bucketCount=24;
+}else if(period==='day'){
+cutoff=now-7*86400;bucketSec=86400;bucketCount=7;
+}else if(period==='week'){
+cutoff=now-28*86400;bucketSec=7*86400;bucketCount=4;
+}else{ // month
+cutoff=now-30*86400;bucketSec=86400;bucketCount=30;
+}
+
+// 初始化 buckets
+for(var b=0;b<bucketCount;b++){
+var t=cutoff+b*bucketSec;
+buckets[t]={total:0};
+for(var j=0;j<dids.length;j++)buckets[t][dids[j]]=0;
+bucketLabels.push(t);
+}
+
+// 聚合（kWh = watts * (5*60/3600) / 1000 = watts / 12000）
+var KWH_FACTOR=1/12000;
+for(var i=0;i<points.length;i++){
+var p=points[i];
+if(p.ts<cutoff)continue;
+var bt=cutoff+Math.floor((p.ts-cutoff)/bucketSec)*bucketSec;
+if(!buckets[bt])continue;
+buckets[bt].total+=p.total_watts*KWH_FACTOR;
+var devs=p.devices||{};
+for(var j=0;j<dids.length;j++){
+buckets[bt][dids[j]]+=(devs[dids[j]]?devs[dids[j]].watts:0)*KWH_FACTOR;
+}
+}
+
+// 转为 datasets
+var totalData=[],deviceData={};
+for(var j=0;j<dids.length;j++)deviceData[dids[j]]=[];
+
+for(var b=0;b<bucketLabels.length;b++){
+var bt=bucketLabels[b],bk=buckets[bt];
+totalData.push(bk?Math.round(bk.total*100)/100:0);
+for(var j=0;j<dids.length;j++){
+deviceData[dids[j]].push(bk?Math.round(bk[dids[j]]*100)/100:0);
+}
+}
+
+// 生成时间标签
+var labels=[];
+for(var b=0;b<bucketLabels.length;b++){
+var ts=bucketLabels[b];
+labels.push(formatBucketLabel(ts,period));
+}
+
+var datasets=[];
+// 总计线（粗线）
+datasets.push({
+label:'总计',
+icon:'📈',
+data:totalData,
+borderColor:'#d2a8ff',
+backgroundColor:'rgba(210,168,255,0.1)',
+borderWidth:2.5,
+pointRadius:2,
+pointHoverRadius:5,
+tension:0.3,
+fill:true
+});
+// 各设备线
+for(var j=0;j<dids.length;j++){
+var did=dids[j];
+datasets.push({
+label:DEV_NAMES[did]||did,
+icon:DEV_ICONS[did]||'⚡',
+data:deviceData[did],
+borderColor:DEV_COLORS[j%DEV_COLORS.length],
+backgroundColor:'transparent',
+borderWidth:1.5,
+pointRadius:1,
+pointHoverRadius:3,
+tension:0.3,
+hidden:(j>=6) // 超过6个设备默认折叠
+});
+}
+
+return{labels:labels,datasets:datasets};
+}
+
+function formatBucketLabel(ts,period){
+var d=new Date(ts*1000);
+if(period==='hour')return ('0'+d.getHours()).slice(-2)+':00';
+if(period==='day'||period==='month')return (d.getMonth()+1)+'/'+d.getDate();
+// week
+var end=new Date((ts+7*86400)*1000);
+return (d.getMonth()+1)+'/'+d.getDate()+'-'+(end.getMonth()+1)+'/'+end.getDate();
+}
+
+function drawChart(result,period){
+var ctx=document.getElementById('ep-chart');
+if(_energyChart){_energyChart.destroy();_energyChart=null;}
+
+// 计算总计
+var totalKwh=0;
+var td=result.datasets[0].data;
+for(var i=0;i<td.length;i++)totalKwh+=td[i];
+var unit=period==='hour'?'今日累计':'期间累计';
+document.getElementById('ep-summary').innerHTML=unit+' <span>'+totalKwh.toFixed(2)+' kWh</span>';
+
+_energyChart=new Chart(ctx,{
+type:'line',
+data:{labels:result.labels,datasets:result.datasets},
+options:{
+responsive:true,
+maintainAspectRatio:false,
+interaction:{mode:'index',intersect:false},
+plugins:{
+legend:{display:false},
+tooltip:{
+backgroundColor:'#161b22',
+titleColor:'#c9d1d9',
+bodyColor:'#c9d1d9',
+borderColor:'#30363d',
+borderWidth:1,
+callbacks:{
+label:function(ctx){return ctx.dataset.label+': '+ctx.parsed.y.toFixed(2)+' kWh';}
+}
+}
+},
+scales:{
+x:{
+ticks:{color:'#8b949e',font:{size:10},maxTicksLimit:period==='hour'?8:period==='week'?4:7},
+grid:{color:'#21262d'}
+},
+y:{
+ticks:{color:'#8b949e',font:{size:10},callback:function(v){return v.toFixed(1)+' kWh';}},
+grid:{color:'#21262d'}
+}
+}
+}
+});
+
+// ── 自定义 HTML 图例 ──
+var legendEl=document.getElementById('ep-legend');
+if(!legendEl){
+legendEl=document.createElement('div');legendEl.id='ep-legend';
+legendEl.className='ep-legend';
+document.querySelector('.ep-chart-wrap').after(legendEl);
+}
+var legendHTML='';
+for(var i=0;i<result.datasets.length;i++){
+var ds=result.datasets[i],icon=ds.icon||'⚡';
+var hidden=_energyChart.isDatasetVisible(i)===false;
+legendHTML+='<div class="ep-leg-item'+(hidden?' dim':'')+'" data-ds="'+i+'">'
++'<span class="ep-leg-dot" style="background:'+ds.borderColor+'"></span>'
++EMO(icon)+' <span class="ep-leg-label">'+ds.label+'</span>'
++'</div>';
+}
+legendEl.innerHTML=legendHTML;
+legendEl.onclick=function(e){
+var item=e.target.closest('.ep-leg-item');
+if(!item)return;
+var idx=parseInt(item.dataset.ds);
+var meta=_energyChart.getDatasetMeta(idx);
+meta.hidden=!meta.hidden;
+item.classList.toggle('dim',meta.hidden);
+_energyChart.update();
+};
+
+// 弹窗打开后 resize chart
+setTimeout(function(){
+if(_energyChart)_energyChart.resize();
+},100);
+}
+
+// ═══ 待机分析热力图 ═══
+(function(){
+var pop=document.createElement('div');pop.className='sb-popup';pop.id='sb-popup';
+pop.innerHTML='<div class="sb-card">'+
+'<div class="sb-hdr"><h2>📊 待机延迟分析</h2><button class="sb-close" onclick="document.getElementById(\'sb-popup\').classList.remove(\'open\')">✕</button></div>'+
+'<div class="sb-wd-toggle" id="sb-wd-toggle">'+
+'<button data-wd="true" class="active">工作日</button>'+
+'<button data-wd="false">非工作日</button>'+
+'</div>'+
+'<div class="sb-grid" id="sb-grid"></div>'+
+'<div class="sb-legend">'+
+'<span><span class="dot d15"></span>15min</span>'+
+'<span><span class="dot d30"></span>30min</span>'+
+'<span><span class="dot d60"></span>60min</span>'+
+'<span><span class="dot d120"></span>120min/无数据</span>'+
+'</div>'+
+'<div id="sb-note" style="font-size:10px;color:#484f58;margin-top:6px"></div>'+
+'</div>';
+document.body.appendChild(pop);
+document.getElementById('sb-wd-toggle').addEventListener('click',function(e){
+if(e.target.tagName!=='BUTTON')return;
+var btns=this.querySelectorAll('button');
+for(var i=0;i<btns.length;i++)btns[i].classList.remove('active');
+e.target.classList.add('active');
+renderStandbyGrid(e.target.dataset.wd==='true');
+});
+})();
+
+var ROOM_NAMES_SB={br:'主卧',st:'书房',lr:'客餐厅',nb:'北次卧',sb:'南次卧',
+kt:'厨房',cr:'走廊',gb:'客卫',bath:'主卫'};
+
+function showStandbyViz(){
+document.getElementById('sb-popup').classList.add('open');
+var btns=document.querySelectorAll('#sb-wd-toggle button');
+renderStandbyGrid(true);
+}
+
+function renderStandbyGrid(isWd){
+fetch('/static/data/standby_schedule.json?t='+Date.now())
+.then(function(r){if(!r.ok)throw Error('HTTP '+r.status);return r.json();})
+.then(function(sched){
+var schedule=sched.schedule||{};
+var rooms=Object.keys(schedule);
+if(!rooms.length){
+document.getElementById('sb-grid').innerHTML='<div style="color:#484f58;padding:20px;text-align:center">暂无数据，需要累积5个同类型日样本后开始分析（每天凌晨3:00更新）</div>';
+document.getElementById('sb-note').textContent='';
+return;
+}
+// 筛选当前 is_workday
+var data={};
+for(var r=0;r<rooms.length;r++){
+var entry=schedule[rooms[r]];
+for(var i=0;i<entry.length;i++){
+if(entry[i].is_workday===isWd){
+if(!data[rooms[r]])data[rooms[r]]={};
+data[rooms[r]][entry[i].hour]=entry[i].delay_min;
+}
+}
+}
+// 构建热力图网格
+var roomOrder=['br','st','lr','nb','sb','kt','cr','gb','bath'];
+var roomsInData=roomOrder.filter(function(r){return data[r];});
+if(!roomsInData.length){
+document.getElementById('sb-grid').innerHTML='<div style="color:#484f58;padding:20px;text-align:center">当前类型（'+(isWd?'工作日':'非工作日')+'）暂无数据</div>';
+document.getElementById('sb-note').textContent='';
+return;
+}
+var gridHTML='';
+// 表头行
+gridHTML+='<div class="sb-cell hdr room"></div>';
+for(var h=0;h<24;h++){
+gridHTML+='<div class="sb-cell hdr">'+h+'</div>';
+}
+// 每行一个房间
+for(var ri=0;ri<roomsInData.length;ri++){
+var rk=roomsInData[ri];
+gridHTML+='<div class="sb-cell room">'+EMO((ROOM_NAMES_SB[rk]||rk))+'</div>';
+for(var h=0;h<24;h++){
+var d=data[rk][h];
+var cls='tnone',label='';
+if(d===15){cls='t15';label='15m';}
+else if(d===30){cls='t30';label='30m';}
+else if(d===60){cls='t60';label='60m';}
+else if(d===120){cls='t120';label='2h';}
+gridHTML+='<div class="sb-cell '+cls+'" title="'+(ROOM_NAMES_SB[rk]||rk)+' '+h+':00'+(label?' - '+label:' - 无数据')+'">'+(label||'')+'</div>';
+}
+}
+// 设置grid列数
+var gridEl=document.getElementById('sb-grid');
+gridEl.style.gridTemplateColumns='auto '+Array(24).fill('1fr').join(' ');
+gridEl.innerHTML=gridHTML;
+document.getElementById('sb-note').textContent=sched.ts?'更新于 '+sched.ts:'';
+})
+.catch(function(e){
+document.getElementById('sb-grid').innerHTML='<div style="color:#f85149;padding:20px;text-align:center">加载失败: '+e.message+'</div>';
+});
+}
+
+// ═══ 舒适计划（预冷调度） ═══
+(function(){
+var pop=document.createElement('div');pop.className='pc-popup';pop.id='pc-popup';
+pop.innerHTML='<div class="pc-card">'+
+'<div class="pc-hdr"><h2>📅 舒适计划</h2><button class="pc-close" onclick="document.getElementById(\'pc-popup\').classList.remove(\'open\')">✕</button></div>'+
+'<div id="pc-content"></div>'+
+'<div class="pc-note" id="pc-note"></div>'+
+'</div>';
+document.body.appendChild(pop);
+})();
+
+var PC_ROOM_ICONS={br:'🛏',st:'📚',lr:'🛋',dr:'🍽',nb:'🛏',sb:'🛏'};
+
+function showPrecoolViz(){
+document.getElementById('pc-popup').classList.add('open');
+fetch('/static/data/precool_schedule.json?t='+Date.now())
+.then(function(r){if(!r.ok)throw Error('HTTP '+r.status);return r.json();})
+.then(function(sched){
+var schedule=sched.schedule||{};
+var rooms=Object.keys(schedule);
+var wd=sched.wd_today;
+var container=document.getElementById('pc-content');
+if(!rooms.length){
+container.innerHTML='<div style="color:#484f58;padding:20px;text-align:center">暂无预冷数据，需要累积舒适会话记录后开始分析（每天凌晨3:00更新）</div>';
+document.getElementById('pc-note').textContent='';
+return;
+}
+// 构建表格：行=房间, 列=工作日/非工作日时间段
+var html='<div style="margin-bottom:8px;color:#8b949e;font-size:11px">📍 今天: '+(wd?'工作日':'非工作日')+' | 预冷 = 预计有人前20分钟开始制冷</div>';
+html+='<table class="pc-table"><thead><tr><th>房间</th><th>工作日</th><th>非工作日</th></tr></thead><tbody>';
+for(var r=0;r<rooms.length;r++){
+var rk=rooms[r];
+var wdSlots=[],weSlots=[];
+for(var i=0;i<schedule[rk].length;i++){
+var e=schedule[rk][i];
+var h=e.hour,sm=e.start_min;
+var time=(h<10?'0'+h:h)+':'+(sm<10?'0'+sm:sm);
+if(e.is_workday)wdSlots.push(time);
+else weSlots.push(time);
+}
+html+='<tr><td class="room"><span class="pc-room-icon">'+EMO(PC_ROOM_ICONS[rk]||'')+' '+(ROOM_NAMES_SB[rk]||rk)+'</span></td>';
+html+='<td class="'+(wdSlots.length?'has':'none')+'">'+(wdSlots.length?wdSlots.join(', '):'—')+'</td>';
+html+='<td class="'+(weSlots.length?'has':'none')+'">'+(weSlots.length?weSlots.join(', '):'—')+'</td>';
+html+='</tr>';
+}
+html+='</tbody></table>';
+container.innerHTML=html;
+document.getElementById('pc-note').textContent='更新于 '+(sched.ts||'');
+})
+.catch(function(e){
+document.getElementById('pc-content').innerHTML='<div style="color:#f85149;padding:20px;text-align:center">加载失败: '+e.message+'</div>';
+});
+}
+
+// ═══ 空调控制面板（第三屏抽屉） ═══
+(function(){
+var AC_ROOMS={br:'主卧',st:'书房',lr:'客厅',dr:'餐厅',nb:'北次卧',sb:'南次卧'};
+var AC_ICONS={br:'🛏',st:'📚',lr:'🛋',dr:'🍽',nb:'🛏',sb:'🛏'};
+var _loaded=false;
+
+// 滚动到第三屏时加载开关列表
+var cg2=document.querySelector('.container-grid');
+if(cg2){
+cg2.addEventListener('scroll',function(){
+var onAc=cg2.scrollLeft>cg2.clientWidth*1.5;
+if(onAc&&!_loaded){
+loadAcSwitches();
+_loaded=true;
+}
+});
+}
+
+function loadAcSwitches(){
+fetch('/static/data/ac_disabled.json?t='+Date.now())
+.then(function(r){return r.json();})
+.then(function(data){
+var html='';
+var keys=Object.keys(AC_ROOMS);
+for(var i=0;i<keys.length;i++){
+var rk=keys[i];
+var off=data[rk]||false;
+html+='<div class="ac-ctrl-item">'+
+'<span class="ac-name">'+EMO(AC_ICONS[rk])+' '+AC_ROOMS[rk]+'</span>'+
+'<button class="ac-ctrl-toggle'+(off?'':' on')+'" data-room="'+rk+'"></button>'+
+'</div>';
+}
+document.getElementById('ac-ctrl-list').innerHTML=html;
+}).catch(function(){});
+}
+
+document.getElementById('ac-ctrl-list').addEventListener('click',function(e){
+var btn=e.target.closest('.ac-ctrl-toggle');
+if(!btn)return;
+var room=btn.dataset.room;
+var on=btn.classList.contains('on');
+var next=on?'off':'on';
+fetch(TOGGLE_URL+'/'+room+'?state='+next,{method:'POST'})
+.then(function(r){return r.json();})
+.then(function(){
+btn.classList.toggle('on',next==='on');
+}).catch(function(){});
+});
+})();
+
+// ══════ 按房间数据弹窗 ══════
+var ROOM_DEV_MAP={br:['br_ac'],lr:['lr_ac'],dr:['dr_ac'],st:['st_ac'],nb:['nb_ac'],sb:['sb_ac'],bath:['br_dehum'],gb:['gb_dehum','gb_exhaust'],kt:['kitchen_exhaust']};
+function showRoomData(rk){
+  if(!ROOM_NAMES[rk])return;
+  var name=ROOM_NAMES[rk].replace(/^[^\u4e00-\u9fa5]+/,'');
+  var pop=document.getElementById('rd-popup');
+  if(!pop){
+    pop=document.createElement('div');pop.id='rd-popup';pop.className='energy-popup';
+    pop.innerHTML='<div class="ep-card"><div class="ep-hdr"><h2 id="rd-title"></h2><div class="ep-periods" id="rd-tabs"><button onclick="renderRoomEnergy(window._rdRoom)"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><polygon points="13,2 3,14 12,14 11,22 21,10 12,10" fill="none" stroke="#d29922" stroke-width="2" stroke-linejoin="round"/></svg>能耗</button><button onclick="renderRoomStandby(window._rdRoom)"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="6" y="4" width="4" height="16" rx="1" fill="#8b949e"/><rect x="14" y="4" width="4" height="16" rx="1" fill="#8b949e"/></svg>待机分析</button><button onclick="renderRoomPrecool(window._rdRoom)"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="3" y="5" width="18" height="18" rx="2" fill="none" stroke="#3fb950" stroke-width="2"/><line x1="3" y1="11" x2="21" y2="11" stroke="#3fb950" stroke-width="2"/><text x="12" y="22" text-anchor="middle" font-size="8" fill="#3fb950">★</text></svg>舒适计划</button></div><button class="ep-close" onclick="document.getElementById(\'rd-popup\').classList.remove(\'open\')">✕</button></div><div id="rd-content"></div></div>';
+    document.body.appendChild(pop);
+  }else{
+    document.getElementById('rd-tabs').innerHTML='<button onclick="renderRoomEnergy(window._rdRoom)"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><polygon points="13,2 3,14 12,14 11,22 21,10 12,10" fill="none" stroke="#d29922" stroke-width="2" stroke-linejoin="round"/></svg>能耗</button><button onclick="renderRoomStandby(window._rdRoom)"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="6" y="4" width="4" height="16" rx="1" fill="#8b949e"/><rect x="14" y="4" width="4" height="16" rx="1" fill="#8b949e"/></svg>待机分析</button><button onclick="renderRoomPrecool(window._rdRoom)"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="3" y="5" width="18" height="18" rx="2" fill="none" stroke="#3fb950" stroke-width="2"/><line x1="3" y1="11" x2="21" y2="11" stroke="#3fb950" stroke-width="2"/><text x="12" y="22" text-anchor="middle" font-size="8" fill="#3fb950">★</text></svg>舒适计划</button>';
+  }
+  document.getElementById('rd-title').textContent='📊 '+name;
+  document.getElementById('rd-content').innerHTML='<div style="text-align:center;color:#8b949e;padding:40px">加载中...</div>';
+  pop.classList.add('open');
+  window._rdRoom=rk;
+  renderRoomEnergy(rk);
+  var tb=document.querySelectorAll('#rd-tabs button');for(var ti=0;ti<tb.length;ti++)tb[ti].classList.remove('active');tb[0].classList.add('active');
+}
+function setRdTab(act){var tb=document.querySelectorAll('#rd-tabs button');for(var ti=0;ti<tb.length;ti++)tb[ti].classList.remove('active');for(var tj=0;tj<tb.length;tj++){if(tb[tj].textContent.indexOf(act)>=0)tb[tj].classList.add('active');}}
+function renderRoomEnergy(rk){
+  if(window._rdChart){window._rdChart.destroy();window._rdChart=null;}setRdTab('能耗');
+  var devs=ROOM_DEV_MAP[rk]||[];
+  fetch('/static/data/state_energy_history.json?t='+Date.now()).then(function(r){return r.json()}).then(function(history){
+    if(!history||!history.length){document.getElementById('rd-content').innerHTML='暂无数据';return;}
+    var d=new Date();d.setHours(0,0,0,0);var cutoff=parseInt(d.getTime()/1000);
+    var buckets={};for(var h=0;h<24;h++){buckets[h]=0;}
+    for(var i=0;i<history.length;i++){
+      var p=history[i];if(p.ts<cutoff)continue;var hh=new Date(p.ts*1000).getHours();
+      if(!devs.length)buckets[hh]+=(p.total_watts||0)/1000;
+      else{var dd=p.devices||{};for(var j=0;j<devs.length;j++){var dv=dd[devs[j]];if(dv)buckets[hh]+=(dv.watts||0)/1000;}}
+    }
+    var labels=[],vals=[];for(var h=0;h<24;h++){labels.push(h+'时');vals.push((buckets[h]||0).toFixed(2));}
+    var maxV=0,total=0;for(var k=0;k<vals.length;k++){var v=parseFloat(vals[k]);if(v>maxV)maxV=v;total+=v;}
+    document.getElementById('rd-content').innerHTML='<canvas id="rd-chart" style="max-height:300px"></canvas><div style="font-size:12px;color:#8b949e;text-align:center;margin-top:8px">今日估算：<span style="color:#d2a8ff;font-weight:600">'+total.toFixed(3)+' kWh</span></div>';
+    window._rdChart=new Chart(document.getElementById('rd-chart').getContext('2d'),{type:'bar',data:{labels:labels,datasets:[{label:'kW',data:vals,backgroundColor:'rgba(88,166,255,0.4)',borderColor:'rgba(88,166,255,0.8)',borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,ticks:{color:'#8b949e'}},x:{ticks:{color:'#8b949e'}}},plugins:{legend:{labels:{color:'#c9d1d9'}}}}});
+  });
+}
+function renderRoomStandby(rk){
+  if(window._rdChart){window._rdChart.destroy();window._rdChart=null;}setRdTab('待机');
+  fetch('/static/data/standby_schedule.json?t='+Date.now()).then(function(r){return r.json()}).then(function(sched){
+    var entry=(sched.schedule||{})[rk];
+    if(!entry||!entry.length){document.getElementById('rd-content').innerHTML='<div style="text-align:center;color:#484f58;padding:40px">暂无待机数据</div>';return;}
+    var wdData={},nwdData={};
+    for(var i=0;i<entry.length;i++){if(entry[i].is_workday)wdData[entry[i].hour]=entry[i].delay_min;else nwdData[entry[i].hour]=entry[i].delay_min;}
+    function buildRow(data,label){
+      var htm='<tr><td style="padding:3px 4px;color:#8b949e">'+label+'</td>';
+      for(var h=0;h<24;h++){
+        var v=data[h];var bg='',cl='';
+        if(v){var alpha=Math.min(1,Math.max(0.15,v/120));bg='background:rgba(210,153,34,'+alpha.toFixed(2)+')';cl='color:#c9d1d9';}
+htm+='<td style="padding:2px 3px;font-size:9px;text-align:center;'+bg+';'+cl+'">'+(v||'120')+'</td>';
+      }
+      htm+='</tr>';return htm;
+    }
+    var html='<div style="font-size:12px;color:#8b949e;margin-bottom:10px">动态待机延迟（分钟）</div>';
+    html+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
+    html+='<tr><th style="padding:4px;color:#8b949e;border-bottom:1px solid #30363d"></th>';
+    for(var h=0;h<24;h++)html+='<th style="padding:3px;color:#484f58;font-size:9px">'+h+'</th>';
+    html+='</tr>';
+    html+=buildRow(wdData,'工作日');
+    html+=buildRow(nwdData,'非工作日');
+    html+='</table>';
+    document.getElementById('rd-content').innerHTML=html;
+  });
+}
+function renderRoomPrecool(rk){
+  if(window._rdChart){window._rdChart.destroy();window._rdChart=null;}setRdTab('舒适');
+  fetch('/static/data/precool_schedule.json?t='+Date.now()).then(function(r){return r.json()}).then(function(sched){
+    var entry=(sched.schedule||{})[rk];
+    var wdData={},nwdData={};
+    if(entry){for(var i=0;i<entry.length;i++){var e=entry[i];if(e.is_workday)wdData[e.hour]=e.start_min;else nwdData[e.hour]=e.start_min;}}
+    function buildRow(data,label){
+      var htm='<tr><td style="padding:3px 4px;color:#8b949e">'+label+'</td>';
+      for(var h=0;h<24;h++){
+        var v=data[h];var bg='',cl='',txt='';
+        if(v!==undefined){var alpha=Math.min(1,Math.max(0.2,(v/60)*0.8));bg='background:rgba(88,166,255,'+alpha.toFixed(2)+')';cl='color:#c9d1d9';txt=('0'+h).slice(-2)+':'+(v<10?'0':'')+v;}
+        htm+='<td style="padding:2px 3px;font-size:9px;text-align:center;'+bg+';'+cl+'">'+txt+'</td>';
+      }
+      htm+='</tr>';return htm;
+    }
+    var html='<div style="font-size:12px;color:#8b949e;margin-bottom:10px">预冷/预热计划</div>';
+    html+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
+    html+='<tr><th style="padding:4px;color:#8b949e;border-bottom:1px solid #30363d"></th>';
+    for(var h=0;h<24;h++)html+='<th style="padding:3px;color:#484f58;font-size:9px">'+h+'</th>';
+    html+='</tr>';
+    html+=buildRow(wdData,'工作日');
+    html+=buildRow(nwdData,'非工作日');
+    html+='</table>';
+    document.getElementById('rd-content').innerHTML=html;
+  });
+}
+
+// ══════ 全屋统一数据弹窗 ══════
+function showUnifiedData(tab){
+  window._rdRoom=null;
+  var pop=document.getElementById('rd-popup');
+  if(!pop){
+    pop=document.createElement('div');pop.id='rd-popup';pop.className='energy-popup';
+    pop.innerHTML='<div class="ep-card"><div class="ep-hdr"><h2 id="rd-title"></h2><div class="ep-periods" id="rd-tabs"><button onclick="renderUniEnergy()"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><polygon points="13,2 3,14 12,14 11,22 21,10 12,10" fill="none" stroke="#d29922" stroke-width="2" stroke-linejoin="round"/></svg>能耗</button><button onclick="renderUniStandby()"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="6" y="4" width="4" height="16" rx="1" fill="#8b949e"/><rect x="14" y="4" width="4" height="16" rx="1" fill="#8b949e"/></svg>待机分析</button><button onclick="renderUniComfort()"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="3" y="5" width="18" height="18" rx="2" fill="none" stroke="#3fb950" stroke-width="2"/><line x1="3" y1="11" x2="21" y2="11" stroke="#3fb950" stroke-width="2"/><text x="12" y="22" text-anchor="middle" font-size="8" fill="#3fb950">★</text></svg>舒适计划</button></div><button class="ep-close" onclick="document.getElementById(\'rd-popup\').classList.remove(\'open\')">✕</button></div><div id="rd-content"></div></div>';
+    document.body.appendChild(pop);
+  }else{
+    document.getElementById('rd-tabs').innerHTML='<button onclick="renderUniEnergy()"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><polygon points="13,2 3,14 12,14 11,22 21,10 12,10" fill="none" stroke="#d29922" stroke-width="2" stroke-linejoin="round"/></svg>能耗</button><button onclick="renderUniStandby()"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="6" y="4" width="4" height="16" rx="1" fill="#8b949e"/><rect x="14" y="4" width="4" height="16" rx="1" fill="#8b949e"/></svg>待机分析</button><button onclick="renderUniComfort()"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="3" y="5" width="18" height="18" rx="2" fill="none" stroke="#3fb950" stroke-width="2"/><line x1="3" y1="11" x2="21" y2="11" stroke="#3fb950" stroke-width="2"/><text x="12" y="22" text-anchor="middle" font-size="8" fill="#3fb950">★</text></svg>舒适计划</button>';
+  }
+  document.getElementById('rd-title').textContent='📊 全屋数据';
+  document.getElementById('rd-content').innerHTML='<div style="text-align:center;color:#8b949e;padding:40px">加载中...</div>';
+  pop.classList.add('open');
+  if(tab==='standby')renderUniStandby();else if(tab==='comfort')renderUniComfort();else renderUniEnergy();
+}
+function setUniTab(act){var tb=document.querySelectorAll('#rd-tabs button');for(var ti=0;ti<tb.length;ti++)tb[ti].classList.remove('active');for(var tj=0;tj<tb.length;tj++){if(tb[tj].textContent.indexOf(act)>=0)tb[tj].classList.add('active');}}
+function renderUniEnergy(){
+  if(window._rdChart){window._rdChart.destroy();window._rdChart=null;}setUniTab('能耗');
+  fetch('/static/data/state_energy_history.json?t='+Date.now()).then(function(r){return r.json()}).then(function(history){
+    if(!history||!history.length){document.getElementById('rd-content').innerHTML='暂无数据';return;}
+    var d=new Date();d.setHours(0,0,0,0);var cutoff=parseInt(d.getTime()/1000);
+    var buckets={};for(var h=0;h<24;h++){buckets[h]=0;}
+    for(var i=0;i<history.length;i++){var p=history[i];if(p.ts<cutoff)continue;buckets[new Date(p.ts*1000).getHours()]+=(p.total_watts||0)/1000;}
+    var labels=[],vals=[];for(var h=0;h<24;h++){labels.push(h+'时');vals.push((buckets[h]||0).toFixed(2));}
+    var total=0;for(var t=0;t<vals.length;t++)total+=parseFloat(vals[t]);
+    document.getElementById('rd-content').innerHTML='<canvas id="rd-chart" style="max-height:300px"></canvas><div style="font-size:12px;color:#8b949e;text-align:center;margin-top:8px">全屋今日估算：<span style="color:#d2a8ff;font-weight:600">'+total.toFixed(3)+' kWh</span></div>';
+    window._rdChart=new Chart(document.getElementById('rd-chart').getContext('2d'),{type:'bar',data:{labels:labels,datasets:[{label:'kW',data:vals,backgroundColor:'rgba(88,166,255,0.4)',borderColor:'rgba(88,166,255,0.8)',borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,ticks:{color:'#8b949e'}},x:{ticks:{color:'#8b949e'}}},plugins:{legend:{labels:{color:'#c9d1d9'}}}}});
+  });
+}
+function renderUniStandby(){
+  if(window._rdChart){window._rdChart.destroy();window._rdChart=null;}setUniTab('待机');
+  fetch('/static/data/standby_schedule.json?t='+Date.now()).then(function(r){return r.json()}).then(function(sched){
+    var schedule=sched.schedule||{};
+    var roomOrder=['br','st','lr','nb','sb'];
+    var html='<div style="font-size:12px;color:#8b949e;margin-bottom:10px">动态待机延迟</div><table style="width:100%;border-collapse:collapse;font-size:11px">';
+    html+='<tr><th style="padding:4px;color:#8b949e;border-bottom:1px solid #30363d">房间</th>';
+    for(var h=0;h<24;h++)html+='<th style="padding:3px;color:#484f58;font-size:9px">'+h+'</th>';
+    html+='</tr>';
+    for(var ri=0;ri<roomOrder.length;ri++){
+      var rk=roomOrder[ri];var entry=schedule[rk];if(!entry)continue;
+      var name=ROOM_NAMES[rk]?ROOM_NAMES[rk].replace(/^[^\u4e00-\u9fa5]+/,''):rk;
+      for(var dw=0;dw<2;dw++){
+        var isWd=dw===0,label=isWd?'(工作日)':'(非工作日)';
+        var roomData={};for(var i=0;i<entry.length;i++){if(entry[i].is_workday===isWd)roomData[entry[i].hour]=entry[i].delay_min;}
+        html+='<tr><td style="padding:3px 4px;color:#8b949e;font-size:10px">'+name+'<span style="color:#484f58;font-size:9px">'+label+'</span></td>';
+        for(var h=0;h<24;h++){
+          var v=roomData[h];var bg='',cl='';
+          if(v){var alpha=Math.min(1,Math.max(0.15,v/120));bg='background:rgba(210,153,34,'+alpha.toFixed(2)+')';cl='color:#c9d1d9';}
+          html+='<td style="padding:2px 3px;font-size:9px;text-align:center;'+bg+';'+cl+'">'+(v||'120')+'</td>';
+        }
+        html+='</tr>';
+      }
+    }
+    html+='</table>';document.getElementById('rd-content').innerHTML=html;
+  });
+}
+function renderUniComfort(){
+  if(window._rdChart){window._rdChart.destroy();window._rdChart=null;}setUniTab('舒适');
+  fetch('/static/data/precool_schedule.json?t='+Date.now()).then(function(r){return r.json()}).then(function(sched){
+    var schedule=sched.schedule||{};
+    var roomOrder=['br','st','lr','nb','sb'];
+    var html='<div style="font-size:12px;color:#8b949e;margin-bottom:10px">预冷/预热计划</div>';
+    html+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
+    html+='<tr><th style="padding:4px;color:#8b949e;border-bottom:1px solid #30363d">房间</th>';
+    for(var h=0;h<24;h++)html+='<th style="padding:3px;color:#484f58;font-size:9px">'+h+'</th>';
+    html+='</tr>';
+    for(var ri=0;ri<roomOrder.length;ri++){
+      var rk=roomOrder[ri];var entry=schedule[rk];
+      var name=ROOM_NAMES[rk]?ROOM_NAMES[rk].replace(/^[^\u4e00-\u9fa5]+/,''):rk;
+      html+='<tr><td style="padding:3px 4px;color:#8b949e">'+name+'</td>';
+      // 收集所有计划（合并工作日/非工作日）
+      var data={};
+      if(entry){for(var i=0;i<entry.length;i++){var e=entry[i];if(!data[e.hour]||e.start_min<data[e.hour])data[e.hour]=e.start_min;}}
+      for(var h=0;h<24;h++){
+        var v=data[h];var bg='',cl='',txt='';
+        if(v!==undefined){var alpha=Math.min(1,Math.max(0.2,(v/60)*0.8));bg='background:rgba(88,166,255,'+alpha.toFixed(2)+')';cl='color:#c9d1d9';txt=('0'+h).slice(-2)+':'+(v<10?'0':'')+v;}
+        html+='<td style="padding:2px 3px;font-size:9px;text-align:center;'+bg+';'+cl+'">'+txt+'</td>';
+      }
+      html+='</tr>';
+    }
+    html+='</table>';
+    document.getElementById('rd-content').innerHTML=html;
+  });
+}
+
+</script>
+</body>
+</html>
