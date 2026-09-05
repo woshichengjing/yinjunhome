@@ -9,13 +9,62 @@
 <title>🧠 状态机全貌 — 香槟国际</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
+:root{--dashboard-card-width:250px}
 body{font-family:-apple-system,system-ui,sans-serif;background:#0d1117;color:#c9d1d9}
-.container{position:relative;z-index:1;max-width:1400px;margin:0 auto}
-.container-grid{position:relative;z-index:1;padding:16px;margin-top:40vh}
+.container{position:relative;z-index:1;max-width:none;margin:0 auto}
+.container-grid{position:fixed;z-index:10;left:0;bottom:0;width:100%;max-width:none;padding:12px;margin:0;background:linear-gradient(to top,rgba(13,17,23,.96),rgba(13,17,23,.78),transparent)}
 h1{font-size:22px;color:#58a6ff;margin-bottom:4px}
 .sub{color:#8b949e;font-size:12px;margin-bottom:16px}
 .grid4{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px}
+.room-card{display:flex;gap:12px;flex:0 0 var(--dashboard-card-width);min-width:0;height:100px;box-sizing:border-box;overflow:hidden;padding:10px;cursor:pointer;scroll-snap-align:start;border-color:#ffffff18;border-radius:12px;background:linear-gradient(145deg,#1c2530,#151c25);box-shadow:0 3px 12px #00000020;transition:flex-basis .36s cubic-bezier(.22,1,.36,1),border-color .18s ease,background .18s ease}
+@media(hover:hover){.room-card:hover{border-color:#7cb5e866;background:#202c39}}
+.room-card:focus-visible{outline:2px solid #80bfff;outline-offset:2px}
+#room-devices{position:relative;display:flex;flex-flow:row nowrap;gap:8px;align-items:flex-start;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;padding:2px 2px 8px;scrollbar-width:none}
+#room-devices::-webkit-scrollbar,.cam-cards::-webkit-scrollbar{display:none}
+.wall-layout #_land_row>.drawer-panel{padding:0}
+.wall-layout #room-devices,.wall-layout #cam-cards{padding:0}
+.wall-layout #weather-panel,.wall-layout .grid4{margin-bottom:0}
+.room-summary{position:relative;display:flex;flex-direction:column;justify-content:space-between;flex:0 0 calc(var(--dashboard-card-width) - 22px);width:calc(var(--dashboard-card-width) - 22px);min-height:64px;font-variant-numeric:tabular-nums}
+.room-heading{display:flex;align-items:center;justify-content:space-between;gap:6px;padding-right:13px;height:19px}
+.room-summary .sc-title{display:flex;align-items:center;gap:6px;font-size:13px;line-height:1.4;color:#e0e8f0;white-space:nowrap}
+.room-summary .sc-title .emo{color:#9ab0c4}
+.room-summary .sc-state{display:inline-flex;align-items:center;gap:3px;margin:0;padding:3px 5px;border-radius:5px;font-size:10px;line-height:1;font-weight:500;white-space:nowrap;background:#ffffff07}
+.room-summary .sc-state.occ{color:#81d4a3;background:#3fb95012}
+.room-summary .sc-state.entering{color:#edc16f;background:#d2992218}
+.room-summary .sc-state .emo{width:11px!important;height:11px!important}
+.room-metrics{display:flex;align-items:baseline;gap:10px;white-space:nowrap}
+.room-temperature{color:#f0f5fa;font-size:25px;font-weight:600;line-height:1.1;letter-spacing:-.8px}
+.room-temperature small{font-size:12px;font-weight:400;letter-spacing:0;color:#96a7b8;margin-left:2px}
+.room-comfort{font-size:11px;line-height:1.4;border-radius:5px;padding:3px 6px;color:#91a3b4;background:#ffffff07}
+.room-comfort.ok{color:#81d4a3;background:#3fb95012}
+.room-comfort.warn{color:#edc16f;background:#d2992218}
+.room-comfort.bad{color:#f19b94;background:#f8514914}
+.room-co2{margin-left:auto;font-size:11px;color:#91a3b4}
+.room-co2 small{font-size:9px;margin-right:3px;color:#74889b}
+.room-caption{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:10px;line-height:1.4;color:#8c9eaf;white-space:nowrap}
+.room-device-summary{justify-content:flex-start;gap:8px;font-size:10px}
+.room-device-summary .device-on{color:#81d4a3}
+.room-device-summary .device-unknown{color:#d9b777}
+.room-duration{font-size:9px;color:#8c9eaf}
+.room-expand-hint{position:absolute;right:0;top:3px;color:#8094a7;font-size:14px;line-height:12px;transition:transform .24s ease}
+.room-full{display:flex;flex:0 0 auto;align-items:center;gap:12px;border-left:1px solid #30363d;padding-left:12px;cursor:default;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .18s ease,visibility 0s linear .36s}
+.room-card.expanded{border-color:#79baff88;background:linear-gradient(145deg,#202e3d,#18222e)}
+.room-card.expanded .room-full{opacity:1;visibility:visible;pointer-events:auto;transition:opacity .24s ease .08s,visibility 0s}
+.room-full>*{flex-shrink:0}
+.room-status{display:flex;flex-direction:column;justify-content:center;gap:6px;white-space:nowrap}
+.room-status .sc-info{font-size:11px;line-height:1.5;margin:0;color:#abbac9}
+.room-status .sc-state{display:inline-flex;align-items:center;gap:3px;font-size:11px}
+.room-device-list{display:flex;align-items:center;gap:6px}
+.room-full .dev-box{width:max-content;min-height:70px;height:auto;white-space:nowrap;border-radius:8px;background:#0d16214d;padding:8px 10px}
+.room-full .dev-box>div:first-child{padding-right:24px}
+.room-card.expanded .room-expand-hint{transform:rotate(180deg);color:#80bfff}
+.room-data-btn{border:1px solid #80bfff30;border-radius:7px;padding:10px;background:#80bfff0a;color:#abd1f7;cursor:pointer;font-size:11px;white-space:nowrap}
+.room-data-btn:hover{background:#80bfff20}
+.other-devices{flex:0 0 220px;border-left:1px solid #30363d;margin-left:2px;padding-left:10px}
+.other-devices-list{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.other-devices-list .card{margin:0!important;min-width:190px}
+@media(prefers-reduced-motion:reduce){.room-card,.room-full,.room-card.expanded .room-full,.room-expand-hint{transition:none}}
 .card h2{font-size:14px;color:#58a6ff;border-bottom:1px solid #21262d;padding-bottom:6px;margin-bottom:8px}
 .card h3{font-size:13px;color:#d2a8ff;margin:8px 0 4px}
 .state-row{display:flex;justify-content:space-between;padding:3px 0;font-size:12px;border-bottom:1px solid #21262d33}
@@ -129,7 +178,7 @@ h1{font-size:22px;color:#58a6ff;margin-bottom:4px}
 <div class="windy-readings" id="weather-panel"></div>
 <div class="grid4">
 <div id="room-devices" style="grid-column:1/-1"></div>
-<div style="grid-column:1/-1;text-align:center;margin-top:8px"><span style="cursor:pointer;font-size:12px;color:#8b949e;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:4px 12px;display:inline-block" onclick="showUnifiedData('energy')"><svg class="emo" viewBox="0 0 24 24" style="width:11px;height:11px;vertical-align:middle;margin-right:3px"><rect x="3" y="13" width="4" height="8" rx="1" fill="#8b949e"/><rect x="10" y="8" width="4" height="13" rx="1" fill="#8b949e"/><rect x="17" y="5" width="4" height="16" rx="1" fill="#8b949e" opacity=".5"/></svg>全屋数据分析</span></div>
+<div id="whole-home-analysis" style="grid-column:1/-1;text-align:center;margin-top:8px"><span style="cursor:pointer;font-size:12px;color:#8b949e;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:4px 12px;display:inline-block" onclick="showUnifiedData('energy')"><svg class="emo" viewBox="0 0 24 24" style="width:11px;height:11px;vertical-align:middle;margin-right:3px"><rect x="3" y="13" width="4" height="8" rx="1" fill="#8b949e"/><rect x="10" y="8" width="4" height="13" rx="1" fill="#8b949e"/><rect x="17" y="5" width="4" height="16" rx="1" fill="#8b949e" opacity=".5"/></svg>全屋数据分析</span></div>
 </div>
 </div>
 
@@ -547,13 +596,39 @@ envBadges+='<span class="sc-badge '+lv+'">'+svgIcon(badgeEmo(cond[ci]),11)+cond[
 }
 var rsr=rs&&rs.rooms?rs.rooms[r]:null;
 var act2=rsr?rsr.activity:act;
-html+='<div class="card" style="margin-bottom:8px;display:flex;gap:10px;align-items:flex-start;position:relative"><span style="position:absolute;top:8px;right:8px;cursor:pointer;color:#d2a8ff" onclick="event.stopPropagation();showRoomData(\''+r+'\')"><svg class="emo" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="3" y="13" width="4" height="8" rx="1" fill="#d2a8ff"/><rect x="10" y="8" width="4" height="13" rx="1" fill="#d2a8ff"/><rect x="17" y="5" width="4" height="16" rx="1" fill="#d2a8ff" opacity=".6"/></svg></span>';
-html+='<div class="room-info" style="min-width:0">';
-html+='<div class="sc-title">'+svgIcon(ri[r]||'❓',14)+' '+title+' <span style="color:#8b949e;font-weight:400;font-size:11px">'+parts.join(' · ')+'</span></div>';
-html+=actLabel(act2);
+html+='<article class="card room-card" data-room="'+r+'" tabindex="0" onclick="toggleRoomCard(this,event)" onkeydown="if(event.target===this&&(event.key===\'Enter\'||event.key===\' \')){event.preventDefault();toggleRoomCard(this,event)}">';
+html+='<div class="room-summary">';
+html+='<div class="room-heading"><div class="sc-title">'+svgIcon(ri[r]||'❓',14)+title+'</div>'+actLabel(Array.isArray(act2)?(act2[0]||'unknown'):act2)+'</div>';
+html+='<div class="room-metrics"><span class="room-temperature">'+(rd.at!=null?rd.at:'—')+'<small>°C</small></span>';
+html+='<span class="room-comfort '+(sev[comfort]||'info')+'">'+(comfort||'未知')+'</span>';
+if(rd.co2!=null)html+='<span class="room-co2"><small>CO₂</small>'+rd.co2+'</span>';
+html+='</div><div class="room-caption room-device-summary">';
+var summaryDevs=roomDevs[r]||{},summaryCount=0;
+var summaryNames={ac:'空调',dehum:'除湿',exhaust:'排气'};
+var summaryModes={cool:'制冷',dry:'除湿',heat:'制热',fan_only:'送风',auto:'自动'};
+for(var summaryType in summaryDevs){
+var ds=devs[summaryDevs[summaryType]],deviceState='未知',deviceClass='device-unknown';
+if(ds){
+if(ds.switch==='off'){deviceState='关';deviceClass='';}
+else if(ds.switch==='on'){deviceState=summaryType==='ac'?(summaryModes[ds.climate_state]||'开'):'开';deviceClass='device-on';}
+}
+html+='<span class="'+deviceClass+'">'+(summaryNames[summaryType]||summaryType)+' '+deviceState+'</span>';
+summaryCount++;
+}
+var summaryLights=DATA.lights&&DATA.lights.lights?DATA.lights.lights[r]:null;
+if(summaryLights&&summaryLights.length){
+var litCount=summaryLights.filter(function(light){return light.state==='on';}).length;
+var unknownLights=summaryLights.some(function(light){return light.state!=='on'&&light.state!=='off';});
+html+='<span class="'+(litCount?'device-on':unknownLights?'device-unknown':'')+'">灯 '+(litCount?litCount+'开':unknownLights?'未知':'关')+'</span>';
+summaryCount++;
+}
+if(!summaryCount)html+='<span>暂无设备状态</span>';
 // 停留时间
 var dur=rsr?rsr.duration:0;
-if(dur>0)html+=' <span style="font-size:10px;color:#484f58;font-weight:400">'+dur+'分钟</span>';
+html+='</div><span class="room-expand-hint" aria-hidden="true">›</span></div>';
+html+='<div class="room-full"><div class="room-status">';
+html+='<div class="sc-info">室温 '+(rd.temp!=null?rd.temp+'°C':'—')+(rd.hum!=null?' · 湿度 '+rd.hum+'%':'')+(_tgt!=null?' · 目标体感 '+_tgt+'°C':'')+(dur>0?' · 状态持续 '+dur+'分钟':'')+'</div>';
+if(Array.isArray(act2)&&act2.length>1)html+='<div>'+actLabel(act2)+'</div>';
 if(envBadges)html+='<div style="margin-top:3px">'+envBadges+'</div>';
 var reason=rsr?rsr.reason:es.reason||'';
 if(reason)html+='<div class="sc-info">'+reason+'</div>';
@@ -563,7 +638,7 @@ var rdv=roomDevs[r];
 if(rdv){
 var devHtml='';
 for(var dk in rdv){var did=rdv[dk];var dr=devRow(did,dk);if(dr)devHtml+='<div class="dev-box" style="border:1px solid '+(devTypeColors[dk]||'#30363d')+'">'+dr+'</div>';}
-if(devHtml)html+='<div style="display:flex;gap:6px;flex-wrap:wrap">'+devHtml+'</div>';
+if(devHtml)html+='<div class="room-device-list">'+devHtml+'</div>';
 }
 // 💡 灯光卡
 var ldata=DATA.lights?DATA.lights.lights:null;
@@ -578,28 +653,50 @@ if(ldata&&ldata[r]&&ldata[r].length>0){
   html+='<div style="font-weight:600;color:#c9d1d9;margin-bottom:3px;padding-right:22px">💡 灯光</div>';
   html+='<div style="font-size:10px;color:'+(lOn?'#d29922':'#8b949e')+'">'+onCount+'/'+lights.length+' 开</div></div></div>';
 }
-html+='</div>';
+html+='<button class="room-data-btn" onclick="event.stopPropagation();showRoomData(\''+r+'\')">查看图表</button></div></article>';
 }
 
-// 先插入隐藏容器，测量房间信息宽度，统一对齐
-var tmpHtml='<div id="_tmp_rooms" style="position:absolute;visibility:hidden;max-width:'+document.getElementById('room-devices').offsetWidth+'px">'+EMO(html)+'</div>';
-document.getElementById('room-devices').innerHTML=tmpHtml;
-var riDivs=document.querySelectorAll('#_tmp_rooms .room-info');
-var maxW=0;
-for(var mi=0;mi<riDivs.length;mi++){var w=riDivs[mi].offsetWidth;if(w>maxW)maxW=w;}
-for(var mj=0;mj<riDivs.length;mj++){riDivs[mj].style.minWidth=maxW+'px';}
-// 取调整后的 HTML，追加其他设备后写入
-var finalHtml=document.getElementById('_tmp_rooms').innerHTML;
-var otherDevs=[{id:'laundry_dehum',icon:'👕',label:'洗衣房除湿',key:'dehum'},{id:'fresh_air',icon:'💨',label:'全屋新风',key:'fresh'}];
+var finalHtml=EMO(html);
+var otherDevs=[{id:'laundry_dehum',icon:'👕',label:'洗衣房除湿',key:'dehum'}];
 var otherHtml='';
 for(var oi=0;oi<otherDevs.length;oi++){
 var od=otherDevs[oi];var dr2=devRow(od.id,od.key);
 if(dr2)otherHtml+='<div class="card" style="margin-bottom:8px"><div style="display:flex;gap:10px;align-items:flex-start"><div style="flex:1;min-width:0"><div class="sc-title">'+svgIcon(od.icon,14)+' '+od.label+'</div></div><div style="flex-shrink:0"><div class="dev-box" style="border:1px solid rgba(210,168,255,0.3)">'+dr2+'</div></div></div></div>';
 }
-if(otherHtml)finalHtml+='<div style="border-top:1px solid #30363d;margin-top:6px;padding-top:4px;font-size:11px;color:#8b949e">🔌 其他设备</div>'+otherHtml;
-document.getElementById('room-devices').innerHTML=finalHtml;
+if(otherHtml)finalHtml+='<div class="other-devices"><div style="font-size:11px;color:#8b949e">🔌 其他设备</div><div class="other-devices-list">'+otherHtml+'</div></div>';
+var roomList=document.getElementById('room-devices');
+var expandedCard=roomList.querySelector('.room-card.expanded');
+var expandedRoom=expandedCard?expandedCard.getAttribute('data-room'):null;
+var expandedWidth=expandedCard?expandedCard.style.flexBasis:'';
+roomList.innerHTML=finalHtml;
+roomList.querySelectorAll('.room-card').forEach(function(card){
+var expanded=card.getAttribute('data-room')===expandedRoom;
+card.classList.toggle('expanded',expanded);
+card.setAttribute('aria-expanded',String(expanded));
+if(expanded){card.style.flexBasis=expandedWidth;sizeExpandedRoom(card);}
+});
 updateCountdowns();
 }
+
+function toggleRoomCard(card,event){
+if(event&&event.target.closest('button,a,.room-full'))return;
+var open=!card.classList.contains('expanded');
+var cards=document.querySelectorAll('.room-card.expanded');
+for(var i=0;i<cards.length;i++){cards[i].classList.remove('expanded');cards[i].setAttribute('aria-expanded','false');cards[i].style.flexBasis='';}
+if(open){
+card.classList.add('expanded');card.setAttribute('aria-expanded','true');
+sizeExpandedRoom(card);
+}
+}
+
+function sizeExpandedRoom(card){
+var summary=card.querySelector('.room-summary'),full=card.querySelector('.room-full');
+card.style.flexBasis=Math.ceil(summary.getBoundingClientRect().width+full.getBoundingClientRect().width+34)+'px';
+}
+window.addEventListener('resize',function(){
+var card=document.querySelector('.room-card.expanded');
+if(card)sizeExpandedRoom(card);
+});
 
 function renderExt(d){
 window._ext=d;
@@ -626,9 +723,8 @@ load();
 (function(){
 // CSS
 var s=document.createElement('style');s.textContent=
-'.cam-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-content:start}'+
-'@media(orientation:portrait){.cam-cards{grid-template-columns:1fr 1fr}}'+
-'.cam-card{background:#161b22;border:1px solid #30363d;border-radius:8px;position:relative;overflow:hidden;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:manipulation}'+
+'.cam-cards{position:relative;display:flex;gap:8px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;padding:2px 2px 8px;scrollbar-width:none}'+
+'.cam-card{flex:0 0 var(--dashboard-card-width);background:#161b22;border:1px solid #30363d;border-radius:8px;position:relative;overflow:hidden;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:manipulation;scroll-snap-align:start}'+
 '.cam-card img,.cam-card video{width:100%;height:100%;object-fit:contain}'+
 '.cam-card .cam-lbl{position:absolute;bottom:4px;left:4px;background:rgba(0,0,0,.75);color:#c9d1d9;font-size:10px;padding:2px 7px;border-radius:3px;z-index:2}'+
 '.cam-card .cam-err{color:#484f58;font-size:13px}'+
@@ -691,13 +787,21 @@ var weather=document.getElementById('weather-panel');
 // 1. 天气提取到顶层全宽
 if(weather&&weather.parentNode!==cg){cg.appendChild(weather);}
 weather.style.width='100%';weather.style.flex='none';weather.style.flexWrap='nowrap';weather.style.display='flex';
+var footer=document.getElementById('whole-home-analysis');
+if(!footer){
+  footer=document.createElement('div');footer.id='whole-home-analysis';
+  footer.innerHTML='<span onclick="showUnifiedData(\'energy\')">▥ 全屋数据分析</span>';
+}
+if(footer&&footer.parentNode!==weather)weather.appendChild(footer);
+if(footer){footer.style.cssText='margin-left:auto;flex:0 0 auto;text-align:right';var footerBtn=footer.querySelector('span');if(footerBtn)footerBtn.style.cssText='cursor:pointer;font-size:12px;color:#8b949e;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:4px 12px;display:inline-block';}
 
 // 2. container-grid：flex column（天气 + 数据监控）
 cg.style.display='flex';cg.style.flexDirection='column';
 cg.style.overflowX='visible';cg.style.overflowY='auto';
-cg.style.scrollSnapType='none';cg.style.gap='10px';
+cg.style.scrollSnapType='none';cg.style.gap='12px';
 cg.style.width='100%';cg.style.maxWidth='100%';
-cg.style.maxHeight='';cg.style.marginTop='38vh';cg.style.padding='12px';
+cg.style.maxHeight='52vh';cg.style.marginTop='0';cg.style.padding='12px';
+cg.style.position='fixed';cg.style.left='0';cg.style.bottom='0';cg.style.zIndex='10';
 
 // 3. 中排：左数据 + 右监控
 var dps=document.querySelectorAll('.drawer-panel');
@@ -705,7 +809,7 @@ var camPanel=document.getElementById('cam-cards');
 var existed=document.getElementById('_land_row');
 if(!existed){
   existed=document.createElement('div');existed.id='_land_row';
-  existed.style.cssText='display:flex;gap:10px;flex:1;min-height:0;align-items:flex-start';
+  existed.style.cssText='display:flex;flex-direction:column;gap:12px;width:100%;min-height:0;align-items:stretch';
   cg.appendChild(existed);
 }
 var nodes=[];
@@ -719,23 +823,23 @@ for(var ni=0;ni<nodes.length;ni++){
   if(nodes[ni].parentNode!==existed)existed.appendChild(nodes[ni]);
 }
 if(nodes.length>0){
-  nodes[0].style.flex='1';nodes[0].style.width='';
+  nodes[0].style.flex='none';nodes[0].style.width='100%';
   nodes[0].style.maxHeight='';nodes[0].style.overflowY='visible';
   nodes[0].style.scrollSnapAlign='none';
 }
 if(camPanel){
-  camPanel.style.display='grid';camPanel.style.flex='1';camPanel.style.width='';
-  camPanel.style.gridTemplateColumns='1fr 1fr';camPanel.style.overflowY='visible';
-  camPanel.style.gridAutoRows='auto';camPanel.style.alignContent='start';
+  camPanel.style.display='flex';camPanel.style.flex='none';camPanel.style.width='100%';
+  camPanel.style.overflowX='auto';camPanel.style.overflowY='visible';
+  camPanel.style.gridTemplateColumns='';camPanel.style.gridAutoRows='';camPanel.style.alignContent='';
 }
 // 把 footer 移到 grid4 内作为全宽底行（不移出页面）
 var footer=document.querySelector('.grid4 > [style*=\"grid-column:1/-1\"]:not(#room-devices)');
 if(footer){
-  footer.style.cssText='grid-column:1/-1;text-align:center;margin-top:8px;padding:0;background:none;border:none';
-  if(footer.querySelector('span'))footer.querySelector('span').style.cssText='cursor:pointer;font-size:12px;color:#8b949e;padding:4px 12px;border-radius:6px;display:inline-block;background:#161b22;border:1px solid #30363d';
+  footer.style.display='none';
 }
 var g4=document.querySelector('.grid4');if(g4)g4.style.gridTemplateColumns='1fr';
 var rd=document.getElementById('room-devices');if(rd)rd.style.gridColumn='';
+cg.classList.add('wall-layout');
 // 横屏时强制启动摄像头刷新
 if(!camTimer){refreshCams();camTimer=setInterval(refreshCams,3000);}
 }
@@ -827,6 +931,7 @@ div.addEventListener('click',function(ev){if(ev.target===div){clearInterval(t);d
 var cg2=document.querySelector('.container-grid');
 if(cg2){
 cg2.addEventListener('scroll',function(){
+if(cg2.classList.contains('wall-layout')){if(!camTimer){refreshCams();camTimer=setInterval(refreshCams,3000);}return;}
 var onCam=cg2.scrollLeft>cg2.clientWidth*0.6 && cg2.scrollLeft<cg2.clientWidth*1.5;
 if(onCam&&!camTimer){refreshCams();camTimer=setInterval(refreshCams,3000);}
 else if(!onCam&&camTimer){clearInterval(camTimer);camTimer=null;}
