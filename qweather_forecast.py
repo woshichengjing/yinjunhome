@@ -22,7 +22,10 @@ from zoneinfo import ZoneInfo
 
 LATITUDE = 30.31
 LONGITUDE = 120.12
-OUT = Path(os.environ.get("QWEATHER_FORECAST_OUT", "/app/static/data/weather_forecast.json"))
+OUT = Path(os.environ.get(
+    "QWEATHER_FORECAST_OUT",
+    "/root/.hermes/static/data/weather_forecast.json",
+))
 REFRESH_SECONDS = 30 * 60
 ZONE = ZoneInfo("Asia/Shanghai")
 
