@@ -1,0 +1,165 @@
+/* Wall tablet visual system. UI/UX Pro Max: Smart Home/IoT, dark monitoring.
+   Preserve 250 × 100 room cards, horizontal disclosure, and 12px row gaps. */
+:root {
+  --wall-surface: #1c252b;
+  --wall-raised: #263339;
+  --wall-recessed: #151e24;
+  --wall-text: #edf3f2;
+  --wall-muted: #afbec2;
+  --wall-border: #3a484e;
+  --wall-divider: #303e44;
+  --wall-accent: #a3d6c9;
+  --wall-success: #a4d7b4;
+  --wall-success-bg: #243e33;
+  --wall-warning: #edce92;
+  --wall-warning-bg: #423b2a;
+  --wall-danger: #f2b0a9;
+  --wall-danger-bg: #463033;
+  --wall-sky: #accfea;
+  --wall-focus: #c3e7df;
+  --wall-radius: 14px;
+  --wall-shadow: 0 8px 24px #00000024;
+  --wall-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+body { font-family: var(--wall-font); color: var(--wall-text); }
+.wall-layout .container-grid { background: transparent; scrollbar-width: none; }
+.container-grid::-webkit-scrollbar, #weather-panel::-webkit-scrollbar { display: none; }
+.windy-tip {
+  top: 10px; left: 12px; padding: 9px 14px; border-radius: 10px;
+  background: var(--wall-surface) !important; color: var(--wall-text) !important;
+  border: 1px solid var(--wall-border); border-left: 3px solid var(--wall-accent);
+  box-shadow: var(--wall-shadow); font-size: 18px; font-weight: 500; line-height: 1.4;
+}
+.windy-tip:empty { display: none; }
+.windy-tip[data-severity=red] { border-left-color: var(--wall-danger); }
+.windy-tip[data-severity=orange], .windy-tip[data-severity=yellow] { border-left-color: var(--wall-warning); }
+#weather-panel { gap: 8px; align-items: center; overflow-x: auto; scrollbar-width: none; }
+#weather-panel .wr-item { flex-shrink: 0; min-height: 36px; padding: 7px 10px; gap: 7px; border-color: var(--wall-border); border-radius: 9px; background: var(--wall-surface); }
+#weather-panel .wr-label { color: var(--wall-muted); font-size: 11px; }
+#weather-panel .dv, #weather-panel .wr-val { font-size: 13px; font-weight: 500; }
+#weather-panel .dv:not(.hot):not(.cool), #weather-panel .wr-val { color: var(--wall-text); }
+#weather-panel .src-ic.local { color: var(--wall-accent); }
+#weather-panel .src-ic.qw { color: var(--wall-sky); }
+.analysis-action, .room-data-btn {
+  display: inline-flex; justify-content: center; align-items: center; gap: 8px; min-height: 44px;
+  padding: 0 14px; border: 1px solid var(--wall-border); border-radius: 10px;
+  background: var(--wall-surface); color: var(--wall-text); font: 500 12px var(--wall-font);
+  cursor: pointer; touch-action: manipulation; transition: background .18s ease;
+}
+.analysis-action svg { width: 16px; height: 16px; stroke: var(--wall-accent); fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.room-card { background: var(--wall-surface); border-color: var(--wall-border); border-radius: var(--wall-radius); box-shadow: var(--wall-shadow); touch-action: manipulation; }
+.room-card.expanded { background: var(--wall-raised); border-color: var(--wall-accent); box-shadow: 0 10px 28px #0005; }
+.room-summary .sc-title { color: var(--wall-text); font-size: 14px; font-weight: 600; }
+.room-summary .sc-title .emo { color: var(--wall-muted); }
+.room-summary .sc-state { padding: 3px 5px; font-size: 11px; border-radius: 5px; color: var(--wall-muted); background: var(--wall-recessed); }
+.room-summary .sc-state.occ { color: var(--wall-success); background: var(--wall-success-bg); }
+.room-summary .sc-state.entering { color: var(--wall-warning); background: var(--wall-warning-bg); }
+.room-temperature { font-size: 29px; font-weight: 500; letter-spacing: -1px; color: var(--wall-text); }
+.room-temperature small { color: var(--wall-muted); }
+.room-comfort { padding: 3px 5px; color: var(--wall-muted); background: var(--wall-recessed); }
+.room-comfort.ok { color: var(--wall-success); background: var(--wall-success-bg); }
+.room-comfort.warn { color: var(--wall-warning); background: var(--wall-warning-bg); }
+.room-comfort.bad { color: var(--wall-danger); background: var(--wall-danger-bg); }
+.room-co2, .room-co2 small, .room-caption, .room-duration { color: var(--wall-muted); }
+.room-device-summary { font-size: 11px; gap: 10px; }
+.room-device-summary .device-on { color: var(--wall-success); }
+.room-device-summary .device-unknown { color: var(--wall-warning); }
+.room-full { height: 80px; gap: 8px; padding-left: 10px; border-color: var(--wall-border); }
+.room-insight {
+  width: max-content; min-width: 300px; height: 80px; padding: 9px 10px;
+  justify-content: space-between; gap: 7px; border: 1px solid var(--wall-divider);
+  border-radius: 10px; background: var(--wall-recessed);
+}
+.room-detail-metrics { display: grid; grid-template-columns: repeat(4,max-content); align-items: center; }
+.room-detail-stat { min-width: 64px; padding: 0 9px; border-left: 1px solid var(--wall-divider); }
+.room-detail-stat:first-child { padding-left: 0; border-left: 0; }
+.room-detail-stat:last-child { padding-right: 0; }
+.room-detail-stat span { display: block; margin-bottom: 2px; color: var(--wall-muted); font-size: 9px; line-height: 1.2; }
+.room-detail-stat strong { color: var(--wall-text); font-size: 15px; line-height: 1.1; font-weight: 600; }
+.room-assessment { display: flex; align-items: center; gap: 7px; min-height: 22px; white-space: nowrap; }
+.room-assessment-badges, .room-extra-state { display: flex; align-items: center; gap: 4px; }
+.room-reason { padding-left: 7px; border-left: 1px solid var(--wall-divider); color: var(--wall-muted); font-size: 11px; }
+.room-full .sc-badge { font-size: 11px; }
+.room-full .sc-badge.ok { color: var(--wall-success); background: var(--wall-success-bg); }
+.room-full .sc-badge.warn { color: var(--wall-warning); background: var(--wall-warning-bg); }
+.room-full .sc-badge.bad { color: var(--wall-danger); background: var(--wall-danger-bg); }
+.room-full .sc-badge.info { color: var(--wall-sky); background: var(--wall-recessed); }
+.room-device-list { gap: 8px; height: 80px; }
+.room-full .dev-box { height: 80px; min-height: 80px; padding: 9px 10px; background: var(--wall-recessed); border: 1px solid var(--wall-divider) !important; border-radius: 10px; }
+.room-full .device-detail { min-width: 215px; }
+.room-full .dev-box > div:first-child { color: var(--wall-text); font-weight: 500; }
+.room-full .dev-box > div:last-child { color: var(--wall-muted) !important; font-size: 11px !important; }
+.room-light-card { position: relative; width: 88px !important; min-width: 88px !important; cursor: pointer; }
+.room-light-title { display: flex; align-items: center; gap: 5px; padding-right: 23px; color: var(--wall-text); font-size: 11px; font-weight: 600; }
+.room-light-state { margin-top: 9px; color: var(--wall-muted); font-size: 11px; }
+.room-light-card.is-on .room-light-state { color: var(--wall-warning); }
+.room-light-toggle {
+  position: absolute; top: 7px; right: 7px; width: 25px; height: 25px; border: 1px solid var(--wall-border);
+  border-radius: 7px; background: var(--wall-raised); color: var(--wall-muted); cursor: pointer; touch-action: manipulation;
+}
+.room-light-card.is-on .room-light-toggle { color: var(--wall-success); border-color: var(--wall-success); background: var(--wall-success-bg); }
+.room-data-btn { flex-direction: column; width: 82px; height: 80px; min-height: 80px; padding: 0 8px; }
+.room-data-btn svg { width: 18px; height: 18px; fill: none; stroke: var(--wall-accent); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.wall-layout .cam-card { border-color: var(--wall-border); border-radius: var(--wall-radius); background: var(--wall-recessed); box-shadow: var(--wall-shadow); }
+.wall-layout .cam-card .cam-lbl { bottom: 8px; left: 8px; padding: 5px 8px; font-size: 12px; color: var(--wall-text); background: var(--wall-surface); border-radius: 6px; }
+.wall-layout .cam-card .cam-err { color: var(--wall-muted); font-size: 12px; }
+.forecast-panel {
+  right: 12px; left: auto; top: 12px; width: 350px;
+  max-height: calc(var(--forecast-free-height, 60vh) - 12px);
+  background: var(--wall-surface); border-color: var(--wall-border);
+  border-radius: var(--wall-radius); color: var(--wall-text); box-shadow: var(--wall-shadow);
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+.forecast-header { padding: 16px 16px 12px; }
+.forecast-heading { color: var(--wall-text); font-size: 16px; font-weight: 600; }
+.forecast-location { font-size: 12px; color: var(--wall-muted); }
+.forecast-panel .forecast-current { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px 8px; margin: 0 16px 12px; padding-bottom: 12px; border-color: var(--wall-divider); }
+.forecast-current .ov-item { display: flex; flex-direction: column; align-items: flex-start; padding: 0; gap: 5px; font-size: 13px; line-height: 1.4; color: var(--wall-text); background: transparent; font-weight: 500; }
+.forecast-current .ov-item .wr-label { font-size: 11px; color: var(--wall-muted); }
+.forecast-tabs { margin: 0 16px 12px; border-radius: 10px; background: var(--wall-recessed); }
+.forecast-tab { min-height: 44px; border-radius: 8px; color: var(--wall-muted); font-size: 13px; }
+.forecast-tab[aria-selected=true] { background: var(--wall-raised); color: var(--wall-accent); box-shadow: inset 0 0 0 1px var(--wall-border); font-weight: 600; }
+.forecast-content { padding: 0 16px; }
+.forecast-summary { display: flex; justify-content: space-between; align-items: baseline; color: var(--wall-muted); font-size: 12px; margin-bottom: 10px; }
+.forecast-summary strong { color: var(--wall-text); font-size: 19px; font-weight: 500; }
+.forecast-scroll { background: var(--wall-recessed); border-radius: 10px; }
+.forecast-hour { font-size: 11px; color: var(--wall-muted); padding-top: 10px; }
+.forecast-hour:first-child { color: var(--wall-accent); }
+.forecast-icon { color: var(--wall-warning); }
+.forecast-icon.rain, .forecast-rain span { color: var(--wall-sky); }
+.forecast-icon.cloud { color: var(--wall-muted); }
+.forecast-rain span { font-size: 11px; }
+.forecast-day { grid-template-columns: 38px 24px 1fr 28px 66px 28px; min-height: 42px; font-size: 12px; border-color: var(--wall-divider); }
+.forecast-day-name { color: var(--wall-text); }
+.forecast-condition { color: var(--wall-muted); font-size: 11px; }
+.forecast-condition small { color: var(--wall-sky); font-size: 10px; }
+.forecast-low { color: var(--wall-muted); }
+.forecast-high { color: var(--wall-warning); }
+.forecast-range { background: var(--wall-divider); }
+.forecast-range span { background: linear-gradient(90deg, var(--wall-sky), var(--wall-warning)); }
+.forecast-legend, .forecast-footer { font-size: 11px; color: var(--wall-muted); }
+.forecast-footer { padding: 12px 16px; }
+.forecast-message { color: var(--wall-muted); font-size: 13px; }
+.forecast-retry { min-height: 44px; background: var(--wall-raised); color: var(--wall-text); border-color: var(--wall-border); }
+.analysis-action:focus-visible, .room-data-btn:focus-visible, .room-card:focus-visible,
+.forecast-tab:focus-visible, .forecast-scroll:focus-visible, .forecast-retry:focus-visible {
+  outline: 2px solid var(--wall-focus); outline-offset: -3px;
+}
+.room-card:active, .analysis-action:active, .room-data-btn:active, .forecast-tab:active { background: var(--wall-raised); }
+@media (hover:hover) {
+  .room-card:hover { background: var(--wall-raised); border-color: var(--wall-accent); }
+  .analysis-action:hover, .room-data-btn:hover { background: var(--wall-raised); }
+}
+@media (max-height:850px) {
+  .forecast-header { padding: 10px 14px 8px; }
+  .forecast-panel .forecast-current { gap: 8px; margin: 0 14px 8px; padding-bottom: 8px; }
+  .forecast-tabs { margin: 0 14px 8px; }
+  .forecast-tab { min-height: 44px; }
+  .forecast-content { padding: 0 14px; }
+  .forecast-day { min-height: 26px; }
+  .forecast-summary { margin-bottom: 6px; }
+  .forecast-footer { padding: 4px 14px; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .analysis-action, .room-data-btn, .forecast-tab { transition: none; }
+}
