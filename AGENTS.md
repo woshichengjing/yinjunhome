@@ -158,3 +158,11 @@ P0 设备安全 → P1 用户手动控制 → P2 房间保护（guest 22:00–07
 ## 9. 有疑问先停下来问
 
 这套系统有大量历史演进和边界条件（体感换算、跨日判断、防抖、传感器掉线、手动关保护）。**拿不准一个改动是否安全时，不要猜，先停下来说明疑问。** 宁可少改，不可盲改。
+
+## 10. 和风天气 API 接入（qweather_forecast.py）
+
+- **响应强制 gzip**：Python `urllib` 不自动解压。`response.read()` 后必须检测 `data[:2] == b"\x1f\x8b"` 再 `gzip.decompress(data)`，否则 `decode("utf-8")` 报 `0x8b` 错误（2026-09-06 Codex 踩过，已修复）。
+- **新版 v1 API**（`/weather/v1/hourly`、`/weather/v1/daily`）用账户专属 host + `X-QW-Api-Key` 请求头，不是 `?key=` URL 参数。
+- **凭据在宿主机 `/root/.hermes/.env`**（`QWEATHER_API_HOST` + `QWEATHER_API_KEY`），脚本 `_load_env()` 自动读取，别硬编码进代码。
+- **输出路径**：脚本 OUT 默认 `/app/static/data/` 在宿主机跑是错的（Docker overlay，容器读不到）。必须用 `QWEATHER_FORECAST_OUT=/root/.hermes/static/data/weather_forecast.json` 覆盖，再由 dashboard-sync 同步到容器。
+
