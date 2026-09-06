@@ -154,6 +154,14 @@ def main():
     with open(OUT, "w") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
+    # The dashboard reads a credential-free local snapshot. Refreshing is
+    # throttled inside qweather_forecast, so this is safe for a 1-minute timer.
+    try:
+        from qweather_forecast import refresh_if_stale
+        refresh_if_stale()
+    except Exception as exc:
+        print(f"[snapshot] QWeather forecast unavailable: {exc}", flush=True)
+
 
 if __name__ == "__main__":
     main()
