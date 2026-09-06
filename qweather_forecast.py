@@ -7,6 +7,7 @@ Configuration stays server-side in ``~/.hermes/.env``:
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import sys
@@ -93,7 +94,10 @@ def _request(path: str, params: dict[str, object]) -> dict:
     url = "https://" + host + path + "?" + urllib.parse.urlencode(params)
     request = urllib.request.Request(url, headers=_headers())
     with urllib.request.urlopen(request, timeout=15) as response:
-        return json.loads(response.read().decode("utf-8"))
+        data = response.read()
+        if data[:2] == b"\x1f\x8b":  # 和风强制 gzip
+            data = gzip.decompress(data)
+        return json.loads(data.decode("utf-8"))
 
 
 def _hourly_snapshot(payload: dict) -> dict[str, list]:
