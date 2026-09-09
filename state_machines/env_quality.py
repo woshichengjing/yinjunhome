@@ -460,7 +460,7 @@ def evaluate_room(room: str) -> dict:
         elif temp_val <= at_max and delta >= 0.5:
             # 裸温未超标，湿度推高体感 → 纯闷
             comfort = "不适宜"
-            contributor = "湿度"
+            contributor = "湿度偏高"
         elif temp_val > at_max and delta < 0.5:
             # 裸温本身超标，湿度没补刀 → 干热
             comfort = "不适宜"
@@ -473,7 +473,7 @@ def evaluate_room(room: str) -> dict:
         at_min = thresholds.get("at_min", profile.get("at_min", cfg["at_min"]))
         if at_val < at_min:
             comfort = "不适宜"
-            contributor = "温度" if temp_val < at_min else "湿度"
+            contributor = "温度" if temp_val < at_min else "湿度偏低"
     else:
         # 湿度缺失/AT算不出（传感器掉线，温度靠AC回风降级只有裸温）→ 不臆断体感舒适，
         # 避免"过热+舒适"自相矛盾。裸温/裸湿的 issue 照常输出。
@@ -489,8 +489,10 @@ def evaluate_room(room: str) -> dict:
     # ── 贡献方驱动状态 ──
     def _add_contributor_badge(cond_list):
         """根据贡献方确保对应 badge 点亮。"""
-        if "湿度" in contributor and "偏湿" not in cond_list and "过湿" not in cond_list:
+        if contributor in ("湿度偏高", "温湿综合") and "偏湿" not in cond_list and "过湿" not in cond_list:
             cond_list.insert(0, "偏湿")
+        if contributor == "湿度偏低" and "偏干" not in cond_list and "过干" not in cond_list:
+            cond_list.insert(0, "偏干")
         if "温度" in contributor and "偏热" not in cond_list and "过热" not in cond_list:
             cond_list.insert(0, "偏热")
         if co2_poor and "空气污浊" not in cond_list:
@@ -547,6 +549,7 @@ def run() -> dict:
     season = _get_season()
     result = {
         "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_at": int(time.time()),
         "season": SEASON_CONFIG[season]["label"],
         "rooms": {}
     }

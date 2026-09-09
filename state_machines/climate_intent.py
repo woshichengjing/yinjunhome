@@ -7,6 +7,7 @@ from datetime import datetime
 
 STATE_DIR = "/tmp/hermes_states"
 CONFIG_FILE = os.path.expanduser("~/.hermes/scripts/data/climate_config.json")
+INPUT_MAX_AGE_SECONDS = 180
 
 os.environ["TZ"] = "Asia/Shanghai"
 try: __import__("time").tzset()
@@ -29,10 +30,29 @@ def _load_engine_config() -> dict:
         return {}
 
 
+def _is_fresh(payload: dict, max_age: int = INPUT_MAX_AGE_SECONDS) -> bool:
+    """核心输入必须带生成时间，过期或未来时间都按不可用处理。"""
+    try:
+        generated_at = payload.get("generated_at")
+        if generated_at is None and payload.get("ts"):
+            generated_at = datetime.strptime(payload["ts"], "%Y-%m-%d %H:%M:%S").timestamp()
+        age = int(time.time()) - int(generated_at or 0)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return 0 <= age <= max_age
+
+
 def run() -> dict:
     """Generate climate intent for all controlled rooms. Returns {ts, intents: {room: {...}}}."""
-    room_state = _load("room_state.json").get("rooms", {})
-    env = _load("env_quality.json").get("rooms", {})
+    room_state_data = _load("room_state.json")
+    env_data = _load("env_quality.json")
+    room_state = room_state_data.get("rooms", {})
+    env = env_data.get("rooms", {})
+    stale_inputs = []
+    if not _is_fresh(room_state_data):
+        stale_inputs.append("room_state")
+    if not _is_fresh(env_data):
+        stale_inputs.append("env_quality")
     soft_off = _load("device_soft_off.json")
     ac_disabled = _load("ac_disabled.json")
     suite_bath = _load_engine_config().get("suite_bath", {})
@@ -41,6 +61,18 @@ def run() -> dict:
     intents = {}
 
     for room in ("br", "st", "lr", "dr", "nb", "sb"):
+        if stale_inputs:
+            intents[room] = {
+                "occupancy": "unknown",
+                "purpose": "input_stale",
+                "comfort_target": None,
+                "hvac_preference": "hold",
+                "power_request": "hold",
+                "priority": 0,
+                "reason": "stale_inputs:" + ",".join(stale_inputs),
+                "source": stale_inputs,
+            }
+            continue
         rs = room_state.get(room, {})
         es = env.get(room, {})
 

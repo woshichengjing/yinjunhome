@@ -302,7 +302,11 @@ def main():
             print(f"  [{room}] eval: {e}", flush=True)
 
     # Write room_state.json for other modules
-    room_states = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "rooms": {}}
+    room_states = {
+        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_at": int(time.time()),
+        "rooms": {},
+    }
     for room in ROOMS:
         act = states.get(f"input_text.room_state_{room}", "")
         dur = states.get(f"input_number.room_state_dur_{room}", "0")

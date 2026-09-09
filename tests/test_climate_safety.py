@@ -3,6 +3,7 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -16,6 +17,7 @@ with mock.patch("os.makedirs"):
     from state_machines import climate_intent
     from state_machines import climate_logger
     from state_machines import device_protection
+    from state_machines import env_quality
     from state_machines import external_env
 
 
@@ -44,15 +46,22 @@ class ClimateDecisionTests(unittest.TestCase):
         self.assertTrue(climate_engine._energy_save_from_intent({}, True))
 
     def test_suite_bath_activity_is_reflected_in_intent(self):
+        now = int(time.time())
         room_state = {
+            "generated_at": now,
             "rooms": {
                 "br": {"activity": "empty"},
                 "bath": {"activity": "occupied"},
             }
         }
+        env_state = {"generated_at": now, "rooms": {}}
 
         def load_state(name):
-            return room_state if name == "room_state.json" else {}
+            if name == "room_state.json":
+                return room_state
+            if name == "env_quality.json":
+                return env_state
+            return {}
 
         with tempfile.TemporaryDirectory() as state_dir:
             with mock.patch.object(climate_intent, "STATE_DIR", state_dir), \
@@ -61,6 +70,168 @@ class ClimateDecisionTests(unittest.TestCase):
                 result = climate_intent.run()
         self.assertEqual(result["intents"]["br"]["purpose"], "comfort")
         self.assertEqual(result["intents"]["br"]["occupancy"], "occupied")
+
+    def test_stale_core_input_produces_hold_intent(self):
+        stale = int(time.time()) - climate_intent.INPUT_MAX_AGE_SECONDS - 1
+
+        def load_state(name):
+            if name == "room_state.json":
+                return {"generated_at": stale, "rooms": {"br": {"activity": "occupied"}}}
+            if name == "env_quality.json":
+                return {"generated_at": int(time.time()), "rooms": {}}
+            return {}
+
+        with tempfile.TemporaryDirectory() as state_dir, \
+                mock.patch.object(climate_intent, "STATE_DIR", state_dir), \
+                mock.patch.object(climate_intent, "_load", side_effect=load_state):
+            result = climate_intent.run()
+
+        self.assertTrue(all(
+            intent["purpose"] == "input_stale" and intent["power_request"] == "hold"
+            for intent in result["intents"].values()
+        ))
+
+    def test_legacy_timestamp_is_accepted_during_service_rollout(self):
+        payload = {"ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        self.assertTrue(climate_engine._is_fresh(payload))
+        self.assertTrue(climate_intent._is_fresh(payload))
+
+    def test_engine_refreshes_switch_and_last_changed_from_ha(self):
+        changed = "2026-09-09T12:00:00+08:00"
+        devices = {"br_ac": {"switch": "on", "last_changed": "stale"}}
+        with mock.patch.object(climate_engine, "get_state_full", return_value={
+            "state": "off", "last_changed": changed,
+        }):
+            known = climate_engine._refresh_ac_states(["br_ac"], devices)
+        self.assertTrue(known)
+        self.assertEqual(devices["br_ac"]["switch"], "off")
+        self.assertEqual(devices["br_ac"]["last_changed"], changed)
+
+    def test_recent_live_manual_off_is_not_overwritten(self):
+        now = int(time.time())
+        changed = datetime.fromtimestamp(now).astimezone().isoformat()
+        config = dict(climate_engine.DEFAULTS, rooms=["br"])
+
+        def load_state(name):
+            payloads = {
+                "room_state.json": {"generated_at": now, "rooms": {"br": {"activity": "occupied"}}},
+                "env_quality.json": {"generated_at": now, "rooms": {"br": {
+                    "condition": ["舒适"],
+                    "comfort": "适宜",
+                    "readings": {"temp": 27, "hum": 50, "at": 27},
+                    "thresholds": {"at_max": 27.5, "temp_max": 28},
+                }}},
+                "climate_intent.json": {"generated_at": now, "intents": {"br": {
+                    "purpose": "comfort", "comfort_target": 27.5,
+                }}},
+                "external_env.json": {"generated_at": now, "fresh_eligible": False,
+                                      "current": {"temp": 30, "abs_humidity": 15}},
+                "device_protection.json": {"devices": {"br_ac": {
+                    "switch": "on", "climate_state": "cool", "ac_set_temp": "27",
+                }}},
+            }
+            return payloads.get(name, {})
+
+        with tempfile.TemporaryDirectory() as state_dir, \
+                mock.patch.object(climate_engine, "STATE_DIR", state_dir), \
+                mock.patch.object(climate_engine, "_cfg", return_value=config), \
+                mock.patch.object(climate_engine, "_load_json", side_effect=load_state), \
+                mock.patch.object(climate_engine, "get_state", return_value="off"), \
+                mock.patch.object(climate_engine, "get_attr", return_value=""), \
+                mock.patch.object(climate_engine, "get_state_full", return_value={
+                    "state": "off", "last_changed": changed,
+                }), \
+                mock.patch.object(climate_engine, "_write_snapshot"), \
+                mock.patch.object(climate_engine, "_act") as act:
+            result = climate_engine.run()
+
+        act.assert_not_called()
+        self.assertEqual(result["rooms"]["br"]["decision"], "关机未满30分钟→不控")
+
+    def test_disabled_marker_waits_for_confirmed_off(self):
+        with tempfile.TemporaryDirectory() as state_dir, \
+                mock.patch.object(climate_engine, "STATE_DIR", state_dir), \
+                mock.patch.object(climate_engine, "_act") as act:
+            decision = climate_engine._handle_disabled_room(
+                "br", ["br_ac"], {"br_ac": {"switch": "unknown"}})
+            marker = Path(state_dir, "engine_br_disabled_done")
+            self.assertEqual(decision, "禁用状态未知→待确认")
+            self.assertFalse(marker.exists())
+            act.assert_not_called()
+
+            decision = climate_engine._handle_disabled_room(
+                "br", ["br_ac"], {"br_ac": {"switch": "on"}})
+            self.assertEqual(decision, "禁用→关机待确认")
+            self.assertFalse(marker.exists())
+            act.assert_called_once_with("br_ac", "off")
+
+            decision = climate_engine._handle_disabled_room(
+                "br", ["br_ac"], {"br_ac": {"switch": "off"}})
+            self.assertEqual(decision, "已禁用")
+            self.assertTrue(marker.is_file())
+
+    def test_stale_core_input_blocks_all_automatic_actions(self):
+        now = int(time.time())
+        stale = now - climate_engine.INPUT_MAX_AGE_SECONDS - 1
+        config = dict(climate_engine.DEFAULTS, rooms=["br"])
+
+        def load_state(name):
+            payloads = {
+                "room_state.json": {"generated_at": stale, "rooms": {"br": {"activity": "occupied"}}},
+                "env_quality.json": {"generated_at": now, "rooms": {"br": {
+                    "condition": ["过热"], "readings": {"temp": 31, "hum": 70, "at": 32},
+                }}},
+                "climate_intent.json": {"generated_at": now, "intents": {"br": {
+                    "purpose": "comfort", "comfort_target": 27.5,
+                }}},
+                "external_env.json": {"generated_at": now, "fresh_eligible": True,
+                                      "current": {"temp": 22, "abs_humidity": 10}},
+            }
+            return payloads.get(name, {})
+
+        with tempfile.TemporaryDirectory() as state_dir, \
+                mock.patch.object(climate_engine, "STATE_DIR", state_dir), \
+                mock.patch.object(climate_engine, "_cfg", return_value=config), \
+                mock.patch.object(climate_engine, "_load_json", side_effect=load_state), \
+                mock.patch.object(climate_engine, "get_state", return_value="off"), \
+                mock.patch.object(climate_engine, "get_attr", return_value=""), \
+                mock.patch.object(climate_engine, "get_state_full", return_value={
+                    "state": "off", "last_changed": "2026-09-09T00:00:00+08:00",
+                }), \
+                mock.patch.object(climate_engine, "_write_snapshot"), \
+                mock.patch.object(climate_engine, "_act") as act:
+            result = climate_engine.run()
+
+        act.assert_not_called()
+        self.assertFalse(result["inputs"]["fresh"])
+        self.assertEqual(result["rooms"]["br"]["decision"], "输入数据过期→不控")
+        self.assertEqual(result["fresh"]["decision"], "输入数据过期→不控")
+        self.assertEqual(result["dehum"]["decision"], "输入数据过期→不控")
+
+    def test_low_humidity_cold_effect_never_adds_wet_badge(self):
+        temp_eid = env_quality.ROOM_SENSORS["br"]["temp"]
+        hum_eid = env_quality.ROOM_SENSORS["br"]["hum"]
+        co2_eid = env_quality.ROOM_SENSORS["br"]["co2"]
+
+        def state(entity_id):
+            if entity_id == temp_eid:
+                return "24.5"
+            if entity_id == hum_eid:
+                return "20"
+            if entity_id == co2_eid:
+                return "500"
+            return "off"
+
+        with tempfile.TemporaryDirectory() as state_dir, \
+                mock.patch.object(env_quality, "STATE_DIR", state_dir), \
+                mock.patch.object(env_quality, "load_room_activity", return_value="occupied"), \
+                mock.patch.object(env_quality, "_get_season", return_value="summer"), \
+                mock.patch.object(env_quality, "get_state", side_effect=state):
+            result = env_quality.evaluate_room("br")
+
+        self.assertEqual(result["contributor"], "湿度偏低")
+        self.assertIn("过干", result["condition"])
+        self.assertNotIn("偏湿", result["condition"])
 
     def test_missing_outdoor_data_never_enables_fresh_air(self):
         with tempfile.TemporaryDirectory() as state_dir:

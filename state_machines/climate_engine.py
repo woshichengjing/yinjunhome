@@ -47,6 +47,7 @@ DEFAULTS = {
     "fresh_cool_delta": 2.0, "dry_tcool_buffer": 1.0, "dry_hysteresis": 0.5,
     "suite_bath": {},
 }
+INPUT_MAX_AGE_SECONDS = 180
 
 _DRY = True
 
@@ -129,6 +130,56 @@ def _act(dev_id: str, action: str, temp=None, mode=None, fan=None) -> str:
         with open(sigfile, "w") as f: f.write(sig)
     except OSError: pass
     return desc
+
+
+def _is_fresh(payload: dict, max_age: int = INPUT_MAX_AGE_SECONDS) -> bool:
+    """核心输入必须带生成时间，避免上游故障后继续使用旧决策。"""
+    try:
+        generated_at = payload.get("generated_at")
+        if generated_at is None and payload.get("ts"):
+            generated_at = datetime.strptime(payload["ts"], "%Y-%m-%d %H:%M:%S").timestamp()
+        age = int(time.time()) - int(generated_at or 0)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return 0 <= age <= max_age
+
+
+def _refresh_ac_states(dev_ids: list, devs: dict) -> bool:
+    """从 HA 实时校准 AC 开关和 last_changed；任一设备未知则返回 False。"""
+    all_known = True
+    for dev_id in dev_ids:
+        entity = DEVICES.get(dev_id, {}).get("climate", "")
+        full = get_state_full(entity) if entity else {}
+        state = full.get("state", "") if full else ""
+        if state in ("", "unknown", "unavailable"):
+            devs.setdefault(dev_id, {})["switch"] = "unknown"
+            all_known = False
+            continue
+        devs.setdefault(dev_id, {})["switch"] = "off" if state == "off" else "on"
+        last_changed = full.get("last_changed", "")
+        if last_changed:
+            devs[dev_id]["last_changed"] = last_changed
+    return all_known
+
+
+def _handle_disabled_room(room: str, dev_ids: list, devs: dict) -> str:
+    """禁用只关机一次，但必须等 HA 实时确认所有设备已关后才记完成。"""
+    done_file = os.path.join(STATE_DIR, f"engine_{room}_disabled_done")
+    if os.path.isfile(done_file):
+        return "已禁用"
+    if any(devs.get(dev_id, {}).get("switch") not in ("on", "off") for dev_id in dev_ids):
+        return "禁用状态未知→待确认"
+    on_devices = [dev_id for dev_id in dev_ids if devs[dev_id].get("switch") == "on"]
+    if on_devices:
+        for dev_id in on_devices:
+            _act(dev_id, "off")
+        return "禁用→关机待确认"
+    try:
+        with open(done_file, "w") as f:
+            f.write("1")
+    except OSError:
+        return "禁用已关机→标记失败"
+    return "已禁用"
 
 def _fan_for(activity: str, cond: list, mode: str) -> str:
     if "过热" in cond: return "高风"
@@ -341,8 +392,16 @@ def run() -> dict:
     except (IOError, json.JSONDecodeError):
         pass
 
-    room_state = _load_json("room_state.json").get("rooms", {})
-    env = _load_json("env_quality.json").get("rooms", {})
+    room_state_data = _load_json("room_state.json")
+    env_data = _load_json("env_quality.json")
+    room_state = room_state_data.get("rooms", {})
+    env = env_data.get("rooms", {})
+    stale_inputs = []
+    if not _is_fresh(room_state_data):
+        stale_inputs.append("room_state")
+    if not _is_fresh(env_data):
+        stale_inputs.append("env_quality")
+    inputs_fresh = not stale_inputs
     intent_data = _load_json("climate_intent.json")
     try:
         intent_age = int(time.time()) - int(intent_data.get("generated_at", 0))
@@ -384,49 +443,65 @@ def run() -> dict:
     # ═══ 新风（全屋，按 br/st 需求）═══
     fresh_state = get_state(FRESH_SWITCH)
     fresh_since_f = os.path.join(STATE_DIR, "engine_fresh_since")
-    cool_rooms = [r for r in rooms if "偏热" in cond(r) or "过热" in cond(r)]
-    dehum_need_rooms = [r for r in rooms if "偏湿" in cond(r) or "过湿" in cond(r)]
-    indoor_ahs = [room_ah(r) for r in rooms if room_ah(r) is not None]
-    outdoor_humid = (out_ah is not None and indoor_ahs and out_ah >= min(indoor_ahs))
-    co2_thresh = cfg["co2_high_humid"] if outdoor_humid else cfg["co2_high"]
-    co2_high = any((readings(r).get("co2") or 0) > co2_thresh for r in rooms)
-    fresh_environment_ok = ext.get("fresh_eligible") is True
-    fresh_cool_ok = fresh_environment_ok and bool(cool_rooms) and all(
-        (room_temp(r) is not None and out_temp < room_temp(r) - cfg["fresh_cool_delta"]) for r in cool_rooms)
-    fresh_dehum_ok = fresh_environment_ok and bool(dehum_need_rooms) and out_ah is not None and all(
-        (room_ah(r) is not None and out_ah < room_ah(r)) for r in dehum_need_rooms)
+    cool_rooms = []
+    dehum_need_rooms = []
+    co2_high = False
+    fresh_environment_ok = False
+    fresh_cool_ok = False
+    fresh_dehum_ok = False
     hold_eligible = set()
-    if fresh_cool_ok: hold_eligible |= set(cool_rooms)
-    if fresh_dehum_ok: hold_eligible |= set(dehum_need_rooms)
     fresh_holding = set()
     fresh_target = None
-    if co2_high or fresh_cool_ok or fresh_dehum_ok:
-        fresh_target = "on"
-        now = int(time.time())
-        if fresh_state != "on":
-            with open(fresh_since_f, "w") as f: f.write(str(now))
-            fresh_holding = hold_eligible
-        else:
-            try:
-                since = int(open(fresh_since_f).read().strip())
-            except Exception:
-                since = 0
-            if since and (now - since) < cfg["fresh_observe_min"] * 60:
-                fresh_holding = hold_eligible
-    else:
-        if fresh_state == "on":
-            fresh_target = "off"
-        try: os.remove(fresh_since_f)
-        except OSError: pass
-
     fresh_desc = "无"
-    soft_off = _load_json("device_soft_off.json") if os.path.isfile(os.path.join(STATE_DIR, "device_soft_off.json")) else {}
-    if soft_off.get(FRESH_DEV, False):
-        if fresh_state == "on":
-            _act(FRESH_DEV, "off")
-        fresh_desc = "软关跳过"
-    elif fresh_target == "on": fresh_desc = _act(FRESH_DEV, "on")
-    elif fresh_target == "off": fresh_desc = _act(FRESH_DEV, "off")
+    if not inputs_fresh:
+        fresh_desc = "输入数据过期→不控"
+    else:
+        cool_rooms = [r for r in rooms if "偏热" in cond(r) or "过热" in cond(r)]
+        dehum_need_rooms = [r for r in rooms if "偏湿" in cond(r) or "过湿" in cond(r)]
+        indoor_ahs = [room_ah(r) for r in rooms if room_ah(r) is not None]
+        outdoor_humid = (out_ah is not None and indoor_ahs and out_ah >= min(indoor_ahs))
+        co2_thresh = cfg["co2_high_humid"] if outdoor_humid else cfg["co2_high"]
+        co2_high = any((readings(r).get("co2") or 0) > co2_thresh for r in rooms)
+        fresh_environment_ok = ext.get("fresh_eligible") is True
+        fresh_cool_ok = fresh_environment_ok and bool(cool_rooms) and all(
+            (room_temp(r) is not None and out_temp < room_temp(r) - cfg["fresh_cool_delta"]) for r in cool_rooms)
+        fresh_dehum_ok = fresh_environment_ok and bool(dehum_need_rooms) and out_ah is not None and all(
+            (room_ah(r) is not None and out_ah < room_ah(r)) for r in dehum_need_rooms)
+        if fresh_cool_ok:
+            hold_eligible |= set(cool_rooms)
+        if fresh_dehum_ok:
+            hold_eligible |= set(dehum_need_rooms)
+        if co2_high or fresh_cool_ok or fresh_dehum_ok:
+            fresh_target = "on"
+            now = int(time.time())
+            if fresh_state != "on":
+                with open(fresh_since_f, "w") as f:
+                    f.write(str(now))
+                fresh_holding = hold_eligible
+            else:
+                try:
+                    since = int(open(fresh_since_f).read().strip())
+                except Exception:
+                    since = 0
+                if since and (now - since) < cfg["fresh_observe_min"] * 60:
+                    fresh_holding = hold_eligible
+        else:
+            if fresh_state == "on":
+                fresh_target = "off"
+            try:
+                os.remove(fresh_since_f)
+            except OSError:
+                pass
+
+        soft_off = _load_json("device_soft_off.json") if os.path.isfile(os.path.join(STATE_DIR, "device_soft_off.json")) else {}
+        if soft_off.get(FRESH_DEV, False):
+            if fresh_state == "on":
+                _act(FRESH_DEV, "off")
+            fresh_desc = "软关跳过"
+        elif fresh_target == "on":
+            fresh_desc = _act(FRESH_DEV, "on")
+        elif fresh_target == "off":
+            fresh_desc = _act(FRESH_DEV, "off")
 
     # ═══ 每区空调：绝不开关机，只调模式+设定点+风速 ═══
     # 一区可含多台(客餐厅=客厅+餐厅)：同模式/设定/风速同步；只控开着的机，绝不自动开另一台(B版)
@@ -437,19 +512,14 @@ def run() -> dict:
         soft_off = _load_json("device_soft_off.json") if os.path.isfile(os.path.join(STATE_DIR, "device_soft_off.json")) else {}
         dev_ids = AC[r]
         devs = {dev_id: devp.get(dev_id, {}) for dev_id in dev_ids}
+        live_devices_known = _refresh_ac_states(dev_ids, devs)
 
         # ═══ AC 禁用检查 ═══
         ac_disabled = _load_json("ac_disabled.json") if os.path.isfile(os.path.join(STATE_DIR, "ac_disabled.json")) else {}
         _disabled_done_f = os.path.join(STATE_DIR, f"engine_{r}_disabled_done")
         if ac_disabled.get(r, False):
-            # 物理关机：只执行一次，成功后不再干预（允许手动开启）
-            if not os.path.isfile(_disabled_done_f):
-                for dev_id in dev_ids:
-                    if devs[dev_id].get("switch") == "on":
-                        _act(dev_id, "off")
-                # 记录已关机，后续跳过
-                with open(_disabled_done_f, "w") as f: f.write("1")
-            decisions[r] = "已禁用"
+            # 物理关机只执行一次；实时确认全关后才落完成标记，之后允许用户手动开启。
+            decisions[r] = _handle_disabled_room(r, dev_ids, devs)
             room_modes[r] = "禁用"
             try: os.remove(os.path.join(STATE_DIR, f"engine_{r}_eco_since"))
             except OSError: pass
@@ -458,6 +528,10 @@ def run() -> dict:
             # 解除禁用时清理标记
             try: os.remove(_disabled_done_f)
             except OSError: pass
+        if not inputs_fresh:
+            decisions[r] = "输入数据过期→不控"
+            room_modes[r] = "未知"
+            continue
         act = activity(r)
         intent = intents.get(r, {})
 
@@ -474,24 +548,8 @@ def run() -> dict:
         if bath and act in ("empty", "unknown") and activity(bath) in ("occupied", "entering"):
             act = "occupied"
 
-        # 实时校准 AC 状态（device_protection 数据滞后 60s，手动关机需立即感知）
-        for _did in dev_ids:
-            _ent = DEVICES.get(_did, {}).get("climate", "")
-            if not _ent:
-                continue
-            _full = get_state_full(_ent)
-            if not _full:
-                devs[_did]["switch"] = "unknown"
-                continue
-            _state = _full.get("state", "")
-            if _state in ("", "unknown", "unavailable"):
-                devs[_did]["switch"] = "unknown"
-            else:
-                devs[_did]["switch"] = "off" if _state == "off" else "on"
-            _lc = _full.get("last_changed", "")
-            if _lc:
-                devs[_did]["last_changed"] = _lc
-        if any(devs[dev_id].get("switch") not in ("on", "off") for dev_id in dev_ids):
+        # 实时状态未知时 fail-safe，不根据上一轮设备快照下发动作。
+        if not live_devices_known:
             decisions[r] = "设备状态未知→不控"
             room_modes[r] = "未知"
             continue
@@ -745,8 +803,8 @@ def run() -> dict:
     dehum_rooms = ("br", "bath")
     # 主卫裸温≥30 不运行（除湿机物理在主卫，发热恶化环境）
     _dehum_ceiling = {"br": cfg["dehum_temp_ceiling"], "bath": 30}
-    group_overheat = any("过热" in cond(r) for r in dehum_rooms)
-    dehum_active = [r for r in dehum_rooms if (
+    group_overheat = inputs_fresh and any("过热" in cond(r) for r in dehum_rooms)
+    dehum_active = [r for r in dehum_rooms if inputs_fresh and (
         ("偏湿" in cond(r) or "过湿" in cond(r))
         and (room_temp(r) is not None and room_temp(r) < _dehum_ceiling[r])
         and "跑温" not in cond(r) and "过热" not in cond(r)
@@ -758,7 +816,10 @@ def run() -> dict:
     # 设备软关
     # 除湿禁用
     soft_off = _load_json("device_soft_off.json") if os.path.isfile(os.path.join(STATE_DIR, "device_soft_off.json")) else {}
-    if soft_off.get(DEHUM_DEV, False):
+    if not inputs_fresh:
+        dehum_desc = "输入数据过期→不控"
+        dehum_mode = "未知"
+    elif soft_off.get(DEHUM_DEV, False):
         if dehum_state == "on":
             _act(DEHUM_DEV, "off")
         dehum_desc = "软关跳过"
@@ -779,6 +840,7 @@ def run() -> dict:
     snap = {
         "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "dry_run": _DRY, "season": season_label,
+        "inputs": {"fresh": inputs_fresh, "stale": stale_inputs},
         "outdoor": {"temp": out_temp, "ah": out_ah},
         "fresh": {"state": fresh_state, "target": fresh_target, "decision": fresh_desc,
                   "environment_ok": fresh_environment_ok, "cool_ok": fresh_cool_ok,
