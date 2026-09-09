@@ -123,6 +123,14 @@ def main():
     except Exception as e:
         errors.append(f"env_quality: {e}")
 
+    # ── 2.25. 外部环境（温控引擎的输入，必须先于引擎刷新）──
+    try:
+        from state_machines.external_env import run as ext_env_run
+        ext_data = ext_env_run()
+        write_json("state_external_env.json", ext_data)
+    except Exception as e:
+        errors.append(f"external_env: {e}")
+
     # ── 2.5. 温控意图层 ──
     try:
         from state_machines.climate_intent import run as intent_run
@@ -138,13 +146,6 @@ def main():
     except Exception as e:
         errors.append(f"climate_engine: {e}")
 
-    # ── 3.5. 决策审计日志 ──
-    try:
-        from state_machines.climate_logger import run as logger_run
-        logger_run()
-    except Exception as e:
-        errors.append(f"climate_logger: {e}")
-
     # ── 4. 设备保护 ──
     try:
         from state_machines.device_protection import run as device_run
@@ -153,36 +154,35 @@ def main():
     except Exception as e:
         errors.append(f"device_protection: {e}")
 
-    # ── 5. 外部环境 ──
+    # ── 4.5. 决策审计日志（设备执行后记录本轮真实结果）──
     try:
-        from state_machines.external_env import run as ext_env_run
-        ext_data = ext_env_run()
-        write_json("state_external_env.json", ext_data)
+        from state_machines.climate_logger import run as logger_run
+        logger_run()
     except Exception as e:
-        errors.append(f"external_env: {e}")
+        errors.append(f"climate_logger: {e}")
 
-    # ── 6. 同步其他输出 ──
+    # ── 5. 同步其他输出 ──
     sync_file("room_mode.json", "state_room_mode.json")
     sync_file("climate_intent.json", "state_climate_intent.json")
     sync_file("standby_schedule.json", "standby_schedule.json")
     sync_file("precool_schedule.json", "precool_schedule.json")
     sync_file("ac_disabled.json", "ac_disabled.json")
 
-    # ── 7. 传感器快照 ──
+    # ── 6. 传感器快照 ──
     try:
         from snapshot_sensors import main as snap_main
         snap_main()
     except Exception as e:
         errors.append(f"snapshot_sensors: {e}")
 
-    # ── 8. 能耗 ──
+    # ── 7. 能耗 ──
     try:
         from energy_tracker import run as energy_run
         energy_run()
     except Exception as e:
         errors.append(f"energy_tracker: {e}")
 
-    # ── 9. 待机数据采集 ──
+    # ── 8. 待机数据采集 ──
     try:
         _standby_record(room_data)
     except Exception as e:

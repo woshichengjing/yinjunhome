@@ -12,7 +12,7 @@
   energy_optimal:  true/false
 """
 
-import json, os, time
+import json, os, tempfile, time
 from datetime import datetime
 import http.client
 
@@ -42,9 +42,13 @@ def _ha_req(method: str, path: str, body: dict = None):
         conn.request(method, path, body=json.dumps(body).encode() if body else None, headers=headers)
         resp = conn.getresponse()
         data = resp.read().decode()
-        return json.loads(data)
-    except Exception:
-        return {}
+        if not 200 <= resp.status < 300:
+            print(f"[HA] {method} {path} failed: HTTP {resp.status}", flush=True)
+            return None
+        return json.loads(data) if data else {}
+    except Exception as exc:
+        print(f"[HA] {method} {path} failed: {exc}", flush=True)
+        return None
     finally:
         conn.close()
 
@@ -65,18 +69,20 @@ def get_last_changed(entity_id: str) -> str:
     return str(data.get("last_changed", "")) if data else ""
 
 
-def ha_post(service: str, data: dict):
+def ha_post(service: str, data: dict) -> bool:
     """调 HA REST API 控制设备。"""
     try:
-        return _ha_req("POST", f"/api/services/{service}", body=data)
+        return _ha_req("POST", f"/api/services/{service}", body=data) is not None
     except Exception as e:
         print(f"ha_post({service}) failed: {e}", flush=True)
-        return None
+        return False
 
 
 # ══════════════════════════════════════════════
 # 指令队列
 # ══════════════════════════════════════════════
+
+ACTION_MAX_AGE_SECONDS = 30 * 60
 
 def submit_action(dev_id: str, action: str, temp: int = None, mode: str = None, fan: str = None,
                   force: bool = False, source: str = "manual"):
@@ -97,8 +103,17 @@ def submit_action(dev_id: str, action: str, temp: int = None, mode: str = None, 
         "ts": int(time.time()),
         "source": source,
     }
-    with open(action_file, "w") as f:
-        json.dump(data, f, ensure_ascii=False)
+    os.makedirs(STATE_DIR, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=STATE_DIR, delete=False) as f:
+            json.dump(data, f, ensure_ascii=False)
+            temporary = f.name
+        os.replace(temporary, action_file)
+    finally:
+        if temporary and os.path.exists(temporary):
+            try: os.remove(temporary)
+            except OSError: pass
 
 
 def _load_action(dev_id: str) -> dict | None:
@@ -108,8 +123,19 @@ def _load_action(dev_id: str) -> dict | None:
         return None
     try:
         with open(action_file) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
+            action = json.load(f)
+        if not isinstance(action, dict) or action.get("action") not in ("on", "off", "set"):
+            raise ValueError("unsupported action")
+        created = int(action.get("ts", 0))
+        age = int(time.time()) - created
+        if created <= 0 or age < -300 or age > ACTION_MAX_AGE_SECONDS:
+            _clear_action(dev_id)
+            print(f"[queue] expired action discarded: {dev_id}", flush=True)
+            return None
+        return action
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        _clear_action(dev_id)
+        print(f"[queue] invalid action discarded: {dev_id}", flush=True)
         return None
 
 
@@ -160,7 +186,34 @@ def _read_dry_run() -> bool:
 DRY_RUN = _read_dry_run()  # 模块级初值；run() 每轮热读刷新
 
 
-def _execute_action(dev_id: str, dev: dict, action: dict, protect: bool = True):
+def _verify_climate_action(climate: str, action: dict) -> bool:
+    """回读设备状态，确认本轮要求的字段已经生效。"""
+    state = get_state(climate)
+    if not state:
+        return False
+    act = action.get("action")
+    if act == "off":
+        return state == "off"
+    if state == "off":
+        return False
+    mode = action.get("mode") or ("cool" if act == "on" else None)
+    if mode and state != mode:
+        return False
+    attrs = get_attrs(climate)
+    temp = action.get("temp")
+    if temp is not None:
+        try:
+            if abs(float(attrs.get("temperature")) - float(temp)) > 0.1:
+                return False
+        except (TypeError, ValueError):
+            return False
+    fan = action.get("fan")
+    if fan and attrs.get("fan_mode") != fan:
+        return False
+    return True
+
+
+def _execute_action(dev_id: str, dev: dict, action: dict, protect: bool = True) -> bool:
     """执行排队指令。DRY_RUN 模式下只记录不执行。
     protect=True 才打保护戳(开关机/换模式)；纯调温/风速 protect=False 不占保护窗。"""
     act = action["action"]
@@ -168,44 +221,54 @@ def _execute_action(dev_id: str, dev: dict, action: dict, protect: bool = True):
 
     if DRY_RUN:
         print(f"[DRY_RUN] {dev_id}: {_action_desc(action)} → 跳过执行")
+        _clear_action(dev_id)
+        return True
     elif act == "on":
         temp = action.get("temp")
         mode = action.get("mode") or "cool"
         fan = action.get("fan")
         # scdvb VRV: set_hvac_mode 触发开机，set_temperature 设温
-        ha_post("climate/set_hvac_mode", {"entity_id": climate, "hvac_mode": mode})
+        ok = ha_post("climate/set_hvac_mode", {"entity_id": climate, "hvac_mode": mode})
         time.sleep(0.5)
         if temp is not None:
-            ha_post("climate/set_temperature", {"entity_id": climate, "temperature": temp})
+            ok = ha_post("climate/set_temperature", {"entity_id": climate, "temperature": temp}) and ok
         if fan:
-            ha_post("climate/set_fan_mode", {"entity_id": climate, "fan_mode": fan})
-        if protect:
-            _stamp_exec(dev_id)
-        _clear_action(dev_id)
+            ok = ha_post("climate/set_fan_mode", {"entity_id": climate, "fan_mode": fan}) and ok
 
     elif act == "off":
-        if not DRY_RUN:
-            ha_post("climate/turn_off", {"entity_id": climate})
-        _record_off(dev_id)
-        if protect:
-            _stamp_exec(dev_id)
-        _clear_action(dev_id)
+        ok = ha_post("climate/turn_off", {"entity_id": climate})
 
     elif act == "set":
         temp = action.get("temp")
         mode = action.get("mode")
         fan = action.get("fan")
-        if temp:
-            ha_post("climate/set_temperature", {"entity_id": climate, "temperature": temp})
+        ok = True
+        if temp is not None:
+            ok = ha_post("climate/set_temperature", {"entity_id": climate, "temperature": temp}) and ok
         if mode:
-            ha_post("climate/set_hvac_mode", {"entity_id": climate, "hvac_mode": mode})
+            ok = ha_post("climate/set_hvac_mode", {"entity_id": climate, "hvac_mode": mode}) and ok
         if fan:
             if mode:
                 time.sleep(1)
-            ha_post("climate/set_fan_mode", {"entity_id": climate, "fan_mode": fan})
-        if protect:
-            _stamp_exec(dev_id)
-        _clear_action(dev_id)
+            ok = ha_post("climate/set_fan_mode", {"entity_id": climate, "fan_mode": fan}) and ok
+    else:
+        print(f"[queue] invalid action retained: {dev_id}/{act}", flush=True)
+        return False
+
+    if ok:
+        time.sleep(0.5)
+        ok = _verify_climate_action(climate, action)
+    if not ok:
+        print(f"[queue] action not confirmed; retained for retry: {dev_id}/{act}", flush=True)
+        return False
+    if act == "off":
+        _record_off(dev_id)
+    elif act == "on":
+        _record_on(dev_id)
+    if protect:
+        _stamp_exec(dev_id)
+    _clear_action(dev_id)
+    return True
 
 
 def _record_on(dev_id: str):
@@ -332,20 +395,33 @@ def evaluate_device(dev_id: str, dev: dict) -> dict:
             else:
                 act = action["action"]
                 mode = action.get("mode")
+                ok = True
                 if act == "on":
-                    if state == "off":
-                        ha_post("humidifier/turn_on", {"entity_id": entity})
+                    if state != "on":
+                        ok = ha_post("humidifier/turn_on", {"entity_id": entity})
                     if mode:
-                        ha_post("humidifier/set_mode", {"entity_id": entity, "mode": mode})
-                elif act == "off" and state == "on":
-                    ha_post("humidifier/turn_off", {"entity_id": entity})
+                        ok = ha_post("humidifier/set_mode", {"entity_id": entity, "mode": mode}) and ok
+                elif act == "off":
+                    if state != "off":
+                        ok = ha_post("humidifier/turn_off", {"entity_id": entity})
                 elif act == "set" and mode:
-                    ha_post("humidifier/set_mode", {"entity_id": entity, "mode": mode})
-                _stamp_exec(dev_id)   # 执行后开保护窗
-                _clear_action(dev_id)
-                b2, r2, e2 = _protection(dev_id)
-                result["restart_blocked"], result["restart_remaining_min"], result["protection_ends_at"] = b2, r2, e2
-                result["next_action"] = f"已执行: {action_desc}"
+                    ok = ha_post("humidifier/set_mode", {"entity_id": entity, "mode": mode})
+                elif act not in ("on", "off", "set"):
+                    ok = False
+                if ok:
+                    time.sleep(0.5)
+                    confirmed_state = get_state(entity)
+                    confirmed_mode = get_attrs(entity).get("mode") if mode else None
+                    expected_state = state if act == "set" else ("off" if act == "off" else "on")
+                    ok = confirmed_state == expected_state and (not mode or confirmed_mode == mode)
+                if ok:
+                    _stamp_exec(dev_id)   # 确认执行后才开启保护窗
+                    _clear_action(dev_id)
+                    b2, r2, e2 = _protection(dev_id)
+                    result["restart_blocked"], result["restart_remaining_min"], result["protection_ends_at"] = b2, r2, e2
+                    result["next_action"] = f"已执行: {action_desc}"
+                else:
+                    result["next_action"] = f"执行未确认，等待重试: {action_desc}"
         elif blocked:
             result["next_action"] = "保护中"
         return result
@@ -370,12 +446,24 @@ def evaluate_device(dev_id: str, dev: dict) -> dict:
                 _clear_action(dev_id)
                 result["next_action"] = f"[DRY_RUN] 已跳过: {action_desc}"
             else:
-                if action["action"] == "on" and sw == "off":
-                    ha_post("switch/turn_on", {"entity_id": dev["switch"]})
-                elif action["action"] == "off" and sw == "on":
-                    ha_post("switch/turn_off", {"entity_id": dev["switch"]})
-                _clear_action(dev_id)
-                result["next_action"] = f"已执行: {action_desc}"
+                ok = True
+                if action["action"] == "on":
+                    if sw != "on":
+                        ok = ha_post("switch/turn_on", {"entity_id": dev["switch"]})
+                elif action["action"] == "off":
+                    if sw != "off":
+                        ok = ha_post("switch/turn_off", {"entity_id": dev["switch"]})
+                elif action["action"] not in ("on", "off"):
+                    ok = False
+                if ok:
+                    time.sleep(0.5)
+                    expected_state = "on" if action["action"] == "on" else "off"
+                    ok = get_state(dev["switch"]) == expected_state
+                if ok:
+                    _clear_action(dev_id)
+                    result["next_action"] = f"已执行: {action_desc}"
+                else:
+                    result["next_action"] = f"执行未确认，等待重试: {action_desc}"
         return result
 
     # 空调 — 完整保护 + 指令队列
@@ -383,7 +471,10 @@ def evaluate_device(dev_id: str, dev: dict) -> dict:
     tag = dev_id.split("_")[0]
 
     climate_state = get_state(dev["climate"])
-    sw = "on" if climate_state != "off" else "off"
+    if climate_state in ("", "unknown", "unavailable"):
+        sw = "unknown"
+    else:
+        sw = "off" if climate_state == "off" else "on"
     attrs = get_attrs(dev["climate"])
     ac_cur = str(attrs.get("current_temperature", ""))
     ac_set = str(attrs.get("temperature", ""))
@@ -397,7 +488,9 @@ def evaluate_device(dev_id: str, dev: dict) -> dict:
     }
 
     # 压缩机负载
-    if sw != "on":
+    if sw == "unknown":
+        result["compressor_load"] = "未知"
+    elif sw != "on":
         result["compressor_load"] = "已停止"
     else:
         try:
@@ -419,6 +512,8 @@ def evaluate_device(dev_id: str, dev: dict) -> dict:
     # 运行状态
     if sw == "on":
         result["state"] = "running"
+    elif sw == "unknown":
+        result["state"] = "unknown"
     elif blocked:
         result["state"] = "protected"
     else:
@@ -433,9 +528,12 @@ def evaluate_device(dev_id: str, dev: dict) -> dict:
     elif sw == "on":
         result["energy_optimal"] = True
         result["energy_note"] = "谷电运行"
-    else:
+    elif sw == "off":
         result["energy_optimal"] = True
         result["energy_note"] = "未运行"
+    else:
+        result["energy_optimal"] = False
+        result["energy_note"] = "设备状态未知"
 
     # ── 指令队列 ──
     # 保护仅约束「开关机 / 换模式」(压缩机启停)；纯调温/调风速自由执行，不受保护窗、不重置窗
@@ -460,9 +558,11 @@ def evaluate_device(dev_id: str, dev: dict) -> dict:
             next_action = f"等待执行: {action_desc}"
             protection_ends_at = ends_at
         else:
-            _execute_action(dev_id, dev, action, protect=(protect_op and not force))  # force不打戳(恢复动作)
+            executed = _execute_action(dev_id, dev, action, protect=(protect_op and not force))  # force不打戳(恢复动作)
             if DRY_RUN:
                 next_action = "[DRY_RUN] 已跳过: " + action_desc
+            elif not executed:
+                next_action = "执行未确认，等待重试: " + action_desc
             elif force:
                 next_action = "⚠️强制重发(代理失真恢复): " + action_desc
             elif protect_op:

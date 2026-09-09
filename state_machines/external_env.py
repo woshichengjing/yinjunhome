@@ -80,6 +80,17 @@ def load_config():
         return {}
 
 
+def _fresh_temp_is_eligible(out_temp, cfg: dict) -> bool:
+    if out_temp is None:
+        return False
+    try:
+        minimum = cfg.get("fresh_temp_min", FRESH_TEMP_MIN)
+        maximum = cfg.get("fresh_temp_max", FRESH_TEMP_MAX)
+        return minimum <= float(out_temp) <= maximum
+    except (TypeError, ValueError):
+        return False
+
+
 def _calc_at(t: float, rh: float) -> float:
     """体感温度 — 水汽压阈值法，仅需温湿度，适合室内无风。"""
     import math
@@ -116,26 +127,29 @@ def run() -> dict:
     except (ValueError, TypeError):
         out_hum = None
 
+    cfg = load_config()
+
     # 峰谷电
     hour = datetime.now().hour
     is_peak = PEAK_START <= hour < PEAK_END
 
     # 季节
-    is_winter = out_temp is not None and out_temp < SEASON_THRESHOLD
+    is_winter = out_temp is not None and out_temp < cfg.get("season_threshold", SEASON_THRESHOLD)
 
     # 体感温度
-    at = _calc_at(out_temp or 25, out_hum or 50)
+    at = _calc_at(out_temp, out_hum) if out_temp is not None and out_hum is not None else None
 
     # 新风条件 — 绝对湿度比较
-    cfg = load_config()
     fresh_eligible = False
     fresh_reasons = []
 
     if out_temp is not None:
         tmin = cfg.get("fresh_temp_min", FRESH_TEMP_MIN)
         tmax = cfg.get("fresh_temp_max", FRESH_TEMP_MAX)
-        if not (tmin <= out_temp <= tmax):
+        if not _fresh_temp_is_eligible(out_temp, cfg):
             fresh_reasons.append(f"室外温度{out_temp}°C不在{tmin}-{tmax}°C范围")
+    else:
+        fresh_reasons.append("无法获取室外温度")
 
     if out_temp is not None and out_hum is not None:
         out_ah = _abs_humidity(out_temp, out_hum)
@@ -160,13 +174,15 @@ def run() -> dict:
                 fresh_reasons.append(f"室外绝对湿度{out_ah}g/m³ ≥ 室内最低{min_indoor_ah}g/m³")
         else:
             fresh_reasons.append("无法获取室内湿度数据")
+    elif out_hum is None:
+        fresh_reasons.append("无法获取室外湿度")
 
     if not fresh_reasons:
         fresh_eligible = True
 
     # 绝对湿度 + 露点
-    out_ah = _abs_humidity(out_temp, out_hum) if out_temp and out_hum else None
-    out_dp = _dew_point(out_temp, out_hum) if out_temp and out_hum else None
+    out_ah = _abs_humidity(out_temp, out_hum) if out_temp is not None and out_hum is not None else None
+    out_dp = _dew_point(out_temp, out_hum) if out_temp is not None and out_hum is not None else None
 
     # 温度趋势（过去3小时）
     trend = "unknown"
@@ -201,6 +217,7 @@ def run() -> dict:
 
     result = {
         "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_at": int(time.time()),
         "current": {
             "temp": out_temp,
             "hum": out_hum,

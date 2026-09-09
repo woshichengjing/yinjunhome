@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""climate_intent.py — 温控意图层 v2.4
+"""climate_intent.py — 温控意图层 v2.5
 输入 room_state + env_quality → 输出每个房间的温控意图（要什么，不是怎么做）。
 """
-import json, os
+import json, os, time
 from datetime import datetime
 
 STATE_DIR = "/tmp/hermes_states"
+CONFIG_FILE = os.path.expanduser("~/.hermes/scripts/data/climate_config.json")
 
 os.environ["TZ"] = "Asia/Shanghai"
 try: __import__("time").tzset()
@@ -20,12 +21,21 @@ def _load(name: str) -> dict:
         return {}
 
 
+def _load_engine_config() -> dict:
+    try:
+        with open(CONFIG_FILE) as f:
+            return json.load(f).get("engine", {})
+    except Exception:
+        return {}
+
+
 def run() -> dict:
     """Generate climate intent for all controlled rooms. Returns {ts, intents: {room: {...}}}."""
     room_state = _load("room_state.json").get("rooms", {})
     env = _load("env_quality.json").get("rooms", {})
     soft_off = _load("device_soft_off.json")
     ac_disabled = _load("ac_disabled.json")
+    suite_bath = _load_engine_config().get("suite_bath", {})
 
     hour = datetime.now().hour
     intents = {}
@@ -35,6 +45,10 @@ def run() -> dict:
         es = env.get(room, {})
 
         activity = rs.get("activity", "unknown")
+        bath = suite_bath.get(room)
+        bath_activity = room_state.get(bath, {}).get("activity", "unknown") if bath else "unknown"
+        if bath and activity in ("empty", "unknown") and bath_activity in ("occupied", "entering"):
+            activity = "occupied"
         readings = es.get("readings", {})
         conditions = es.get("condition", [])
         thresholds = es.get("thresholds", {})
@@ -72,36 +86,6 @@ def run() -> dict:
                 "priority": 1,
                 "reason": "soft_off",
                 "source": ["device_soft_off"],
-            }
-            continue
-
-        # ── P1: 用户手动控制 ──
-        manual_off = os.path.isfile(os.path.join(STATE_DIR, f"engine_{room}_manual_off"))
-        manual_on = os.path.isfile(os.path.join(STATE_DIR, f"engine_{room}_manual_on"))
-
-        if manual_off:
-            intents[room] = {
-                "occupancy": activity,
-                "purpose": "manual_off",
-                "comfort_target": None,
-                "hvac_preference": "off",
-                "power_request": "off",
-                "priority": 1,
-                "reason": "manual_off",
-                "source": ["climate_engine"],
-            }
-            continue
-
-        if manual_on:
-            intents[room] = {
-                "occupancy": "occupied",  # forced
-                "purpose": "manual_on",
-                "comfort_target": 27.5,
-                "hvac_preference": "cool",
-                "power_request": "on",
-                "priority": 1,
-                "reason": "manual_on",
-                "source": ["climate_engine"],
             }
             continue
 
@@ -222,7 +206,8 @@ def run() -> dict:
 
     result = {
         "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "version": "v2.4-intent",
+        "generated_at": int(time.time()),
+        "version": "v2.5-intent",
         "intents": intents,
     }
     # Write to STATE_DIR for logger and other consumers

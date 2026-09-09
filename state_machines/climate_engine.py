@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""空调自动化引擎 v2 — 绝不开关机，只调模式+设定点+风速。
+"""空调自动化引擎 v2 — 以设定点、模式和风速控制为主。
 
-v2(2026-07-07): 移除了所有开关机逻辑。空调开着→按状态步进设定点(find平衡点)+季节模式。
-除湿机/新风控制不变。
+自动启停仅用于连续节能待机，以及有人且不偏冷时恢复一台制冷设备。
+自动模式只管理制冷/除湿；手动制热不接管。除湿机/新风控制不变。
 """
 import json, os, sys, time, math, urllib.request
 from datetime import datetime
@@ -196,25 +196,21 @@ def _compute_setpoint(comfort, at_comfort, energy_save, is_cool,
     return new_sp, reason
 
 
-def _determine_mode(c, cur_mode, rt, room_at, tmax, out_temp, is_winter):
+def _determine_mode(c, cur_mode, rt, room_at, tmax, out_temp):
     """Determine target HVAC mode. Pure function. Returns zone_mode string."""
     target_mode = None
     _wet = ("过湿" in c)  # 仅过湿(>80%)触发除湿，偏湿(65-80%)不除湿
     _hot = ("偏热" in c or "过热" in c)
-    _cold = ("偏冷" in c or "过冷" in c)
-    if is_winter and _cold:
-        target_mode = "heat"
-    elif not is_winter:
-        if "过热" in c:
-            target_mode = "cool"
-        elif _hot and _wet:
-            temp_over = max(0, rt - tmax) if rt is not None and tmax else 0
-            hum_over  = max(0, room_at - rt) if room_at is not None and rt is not None else 0
-            target_mode = "dry" if hum_over >= temp_over else "cool"
-        elif _hot:
-            target_mode = "cool"
-        elif _wet:
-            target_mode = "dry"
+    if "过热" in c:
+        target_mode = "cool"
+    elif _hot and _wet:
+        temp_over = max(0, rt - tmax) if rt is not None and tmax else 0
+        hum_over  = max(0, room_at - rt) if room_at is not None and rt is not None else 0
+        target_mode = "dry" if hum_over >= temp_over else "cool"
+    elif _hot:
+        target_mode = "cool"
+    elif _wet:
+        target_mode = "dry"
     if target_mode == "dry" and out_temp is not None and out_temp > 30:
         target_mode = "cool"
     if target_mode == "dry" and "舒适" in c:
@@ -245,11 +241,26 @@ def _energy_save_for(r, act, c, activity_fn, cond_fn):
     return ("跑温" in c) or (act not in ACTIVE_STATES)
 
 
+def _energy_save_from_intent(intent: dict, fallback: bool) -> bool:
+    """Use the intent layer as the primary comfort/energy decision source."""
+    purpose = intent.get("purpose") if isinstance(intent, dict) else None
+    if purpose == "energy":
+        return True
+    if purpose in ("comfort", "sleeping", "guest_mode"):
+        return False
+    return fallback
 
-def _log_comfort_session(r, now_ts, energy_save, on_units, standby):
+
+def _automatic_cooling_allowed(conditions: list) -> bool:
+    """Never auto-start cooling while the room is already cold."""
+    return "偏冷" not in conditions and "过冷" not in conditions
+
+
+
+def _log_comfort_session(r, now_ts, energy_save, on_units, standby, is_comfortable):
     """Log comfort session to precool_log. Called only when AC is on and comfortable."""
     comfort_file = os.path.join(STATE_DIR, f"engine_{r}_comfort_since")
-    if not energy_save and on_units and not standby:
+    if is_comfortable and not energy_save and on_units and not standby:
         if not os.path.isfile(comfort_file):
             with open(comfort_file, "w") as f: f.write(str(now_ts))
         else:
@@ -332,7 +343,18 @@ def run() -> dict:
 
     room_state = _load_json("room_state.json").get("rooms", {})
     env = _load_json("env_quality.json").get("rooms", {})
-    ext = _load_json("external_env.json")
+    intent_data = _load_json("climate_intent.json")
+    try:
+        intent_age = int(time.time()) - int(intent_data.get("generated_at", 0))
+    except (TypeError, ValueError):
+        intent_age = 10**9
+    intents = intent_data.get("intents", {}) if 0 <= intent_age <= 180 else {}
+    ext_data = _load_json("external_env.json")
+    try:
+        external_age = int(time.time()) - int(ext_data.get("generated_at", 0))
+    except (TypeError, ValueError):
+        external_age = 10**9
+    ext = ext_data if 0 <= external_age <= 180 else {}
     devp = _load_json("device_protection.json").get("devices", {})
     soft_off = _load_json("device_soft_off.json") if os.path.isfile(os.path.join(STATE_DIR, "device_soft_off.json")) else {}
 
@@ -368,9 +390,10 @@ def run() -> dict:
     outdoor_humid = (out_ah is not None and indoor_ahs and out_ah >= min(indoor_ahs))
     co2_thresh = cfg["co2_high_humid"] if outdoor_humid else cfg["co2_high"]
     co2_high = any((readings(r).get("co2") or 0) > co2_thresh for r in rooms)
-    fresh_cool_ok = bool(cool_rooms) and out_temp is not None and all(
+    fresh_environment_ok = ext.get("fresh_eligible") is True
+    fresh_cool_ok = fresh_environment_ok and bool(cool_rooms) and all(
         (room_temp(r) is not None and out_temp < room_temp(r) - cfg["fresh_cool_delta"]) for r in cool_rooms)
-    fresh_dehum_ok = bool(dehum_need_rooms) and out_ah is not None and all(
+    fresh_dehum_ok = fresh_environment_ok and bool(dehum_need_rooms) and out_ah is not None and all(
         (room_ah(r) is not None and out_ah < room_ah(r)) for r in dehum_need_rooms)
     hold_eligible = set()
     if fresh_cool_ok: hold_eligible |= set(cool_rooms)
@@ -436,6 +459,7 @@ def run() -> dict:
             try: os.remove(_disabled_done_f)
             except OSError: pass
         act = activity(r)
+        intent = intents.get(r, {})
 
         c = cond(r)
         rt = room_temp(r)
@@ -457,11 +481,20 @@ def run() -> dict:
                 continue
             _full = get_state_full(_ent)
             if not _full:
+                devs[_did]["switch"] = "unknown"
                 continue
-            devs[_did]["switch"] = "off" if _full.get("state", "") == "off" else "on"
+            _state = _full.get("state", "")
+            if _state in ("", "unknown", "unavailable"):
+                devs[_did]["switch"] = "unknown"
+            else:
+                devs[_did]["switch"] = "off" if _state == "off" else "on"
             _lc = _full.get("last_changed", "")
             if _lc:
                 devs[_did]["last_changed"] = _lc
+        if any(devs[dev_id].get("switch") not in ("on", "off") for dev_id in dev_ids):
+            decisions[r] = "设备状态未知→不控"
+            room_modes[r] = "未知"
+            continue
         # 收集开着的机；全关时根据需求决定是否开机
         on_units = [dev_id for dev_id in dev_ids if devs[dev_id].get("switch") == "on"]
         # 设备软关：排除出温控列表，不对它做任何操作
@@ -489,9 +522,9 @@ def run() -> dict:
             continue
         if not on_units:
             # 判断是否需要开机            # 判断是否需要开机
-            _is_winter = (season_label == "冬")
-            _e_save = _energy_save_for(r, act, c, activity, cond)
-            need_on = not _e_save and not _is_winter
+            _e_save = _energy_save_from_intent(
+                intent, _energy_save_for(r, act, c, activity, cond))
+            need_on = not _e_save and _automatic_cooling_allowed(c)
             # 检测待机状态（即使 AC 关了也要维护 room_modes）
             _is_standby = False
             if _e_save:
@@ -542,9 +575,13 @@ def run() -> dict:
 
         ref = devs[on_units[0]]              # 参考机(第一台在开的)
         cur_mode = ref.get("climate_state", "")
+        if cur_mode == "heat":
+            decisions[r] = "制热为手动模式→不控"
+            room_modes[r] = "手动"
+            continue
 
-        is_winter = (season_label == "冬")
-        energy_save = _energy_save_for(r, act, c, activity, cond)
+        energy_save = _energy_save_from_intent(
+            intent, _energy_save_for(r, act, c, activity, cond))
 
         # ═══ 目标设定点计算（先算，模式+温度一轮下发）═══
         try:
@@ -557,8 +594,11 @@ def run() -> dict:
         except (ValueError, TypeError):
             ac_cur = None
 
-        # 睡眠温度：前半夜 27.5，后半夜(00:00起) 28.5 防过冷
-        if act == "sleeping" and not energy_save:
+        # 舒适目标优先来自意图层；缺失时保留安全兜底。
+        intent_target = intent.get("comfort_target") if isinstance(intent, dict) else None
+        if isinstance(intent_target, (int, float)) and not isinstance(intent_target, bool):
+            at_comfort = intent_target
+        elif act == "sleeping" and not energy_save:
             _sleep_hour = datetime.now().hour
             at_comfort = 28.5 if 3 <= _sleep_hour < 10 else 27.5
         elif energy_save:
@@ -570,7 +610,7 @@ def run() -> dict:
         comfort = max(20, at_comfort)  # 下限20°C
         now_ts = int(time.time())
 
-        # 节能待机：动态延迟（基于历史习惯，无数据时默认120分钟）
+        # 节能待机：动态延迟（基于历史习惯，无数据时默认30分钟）
         hour_now = datetime.now().hour
         standby_file = os.path.join(STATE_DIR, f"engine_{r}_eco_since")
         standby = False
@@ -667,7 +707,7 @@ def run() -> dict:
             fresh_on = False
 
         # 区目标模式
-        zone_mode = _determine_mode(c, cur_mode, rt, room_at, tmax, out_temp, is_winter)
+        zone_mode = _determine_mode(c, cur_mode, rt, room_at, tmax, out_temp)
 
         is_cool = zone_mode in ("cool", "dry")
 
@@ -697,7 +737,9 @@ def run() -> dict:
                      decisions, room_modes)
 
         # ── 舒适会话记录（预冷分析用）──
-        _log_comfort_session(r, now_ts, energy_save, on_units, standby)
+        _log_comfort_session(
+            r, now_ts, energy_save, on_units, standby,
+            env.get(r, {}).get("comfort") == "适宜")
 
     # ═══ 除湿机（主卫设备，br+bath 触发）═══
     dehum_rooms = ("br", "bath")
@@ -739,11 +781,13 @@ def run() -> dict:
         "dry_run": _DRY, "season": season_label,
         "outdoor": {"temp": out_temp, "ah": out_ah},
         "fresh": {"state": fresh_state, "target": fresh_target, "decision": fresh_desc,
-                  "cool_ok": fresh_cool_ok, "dehum_ok": fresh_dehum_ok, "co2_high": co2_high,
+                  "environment_ok": fresh_environment_ok, "cool_ok": fresh_cool_ok,
+                  "dehum_ok": fresh_dehum_ok, "co2_high": co2_high,
                   "holding": sorted(fresh_holding)},
         "rooms": {r: {
             "activity": activity(r), "cond": cond(r),
             "readings": readings(r),
+            "intent": intents.get(r, {}),
             "decision": decisions.get(r, "无"),
         } for r in rooms},
         "dehum": {"state": dehum_state, "mode_cur": dehum_mode_cur, "mode_target": dehum_mode,

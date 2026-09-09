@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""climate_logger.py — 决策审计日志 v2.4
+"""climate_logger.py — 决策审计日志 v2.5
 仅在 HVAC 动作、房间状态、comfort、模式变化或保护拦截时写入 JSONL。
 不记录普通 60s 循环（无变化则静默）。
 """
@@ -34,6 +34,17 @@ def _intent_summary(intent: dict) -> dict:
     }
 
 
+def _device_summary(device: dict) -> dict:
+    """Extract execution fields that matter for auditing and alerting."""
+    return {
+        "state": device.get("state"),
+        "climate_state": device.get("climate_state"),
+        "setpoint": device.get("ac_set_temp"),
+        "next_action": device.get("next_action"),
+        "restart_blocked": device.get("restart_blocked"),
+    }
+
+
 def _hashable(d: dict) -> str:
     """Stable string representation for comparison."""
     return json.dumps(d, sort_keys=True, ensure_ascii=False)
@@ -57,6 +68,7 @@ def run():
     prev = _load(SNAPSHOT_FILE)
     prev_intents = prev.get("intents", {})
     prev_modes = prev.get("modes", {})
+    prev_devices = prev.get("devices", {})
 
     logs = []
 
@@ -75,8 +87,11 @@ def run():
         ac_id = {"br": "br_ac", "st": "st_ac", "lr": "lr_ac",
                   "dr": "dr_ac", "nb": "nb_ac", "sb": "sb_ac"}.get(room, f"{room}_ac")
         dev = devices.get(ac_id, {})
+        dev_summary = _device_summary(dev)
+        previous_device = prev_devices.get(ac_id, {})
+        device_changed = _hashable(dev_summary) != _hashable(previous_device)
 
-        if intent_changed or mode_changed:
+        if intent_changed or mode_changed or device_changed:
             entry = {
                 "time": now,
                 "room": room,
@@ -90,9 +105,11 @@ def run():
                 },
                 "intent": _intent_summary(cur_i),
                 "mode": cur_m,
+                "device": dev_summary,
                 "previous": {
                     "intent": _intent_summary(prev_i) if prev_i else None,
                     "mode": prev_m if prev_m else None,
+                    "device": previous_device or None,
                 },
             }
             logs.append(entry)
@@ -108,6 +125,7 @@ def run():
         "ts": now,
         "intents": {r: _intent_summary(intents[r]) for r in intents},
         "modes": modes,
+        "devices": {dev_id: _device_summary(dev) for dev_id, dev in devices.items()},
     }
     with open(SNAPSHOT_FILE, "w") as f:
         json.dump(snap, f, ensure_ascii=False, indent=2)
