@@ -28,7 +28,17 @@ class ClimateDecisionTests(unittest.TestCase):
         self.assertEqual(mode, "cool")
         self.assertFalse(climate_engine._automatic_cooling_allowed(["偏冷"]))
         self.assertFalse(climate_engine._automatic_cooling_allowed(["过冷"]))
-        self.assertTrue(climate_engine._automatic_cooling_allowed(["舒适"]))
+        self.assertFalse(climate_engine._automatic_cooling_allowed(["舒适"]))
+        self.assertFalse(climate_engine._automatic_cooling_allowed(["空气污浊"]))
+        self.assertFalse(climate_engine._automatic_cooling_allowed(["偏湿"]))
+        self.assertFalse(climate_engine._automatic_cooling_allowed(["偏冷", "过湿"]))
+        self.assertTrue(climate_engine._automatic_cooling_allowed(["偏热"]))
+        self.assertTrue(climate_engine._automatic_cooling_allowed(["过湿"]))
+        self.assertEqual(climate_intent._automatic_power_request(["舒适"]), "hold")
+        self.assertEqual(climate_intent._automatic_power_request(["偏湿"]), "hold")
+        self.assertEqual(climate_intent._automatic_power_request(["偏冷", "过湿"]), "hold")
+        self.assertEqual(climate_intent._automatic_power_request(["偏热"]), "on")
+        self.assertEqual(climate_intent._automatic_power_request(["过湿"]), "on")
 
     def test_fresh_air_temperature_bounds_are_inclusive(self):
         cfg = {"fresh_temp_min": 20, "fresh_temp_max": 26}
@@ -70,6 +80,7 @@ class ClimateDecisionTests(unittest.TestCase):
                 result = climate_intent.run()
         self.assertEqual(result["intents"]["br"]["purpose"], "comfort")
         self.assertEqual(result["intents"]["br"]["occupancy"], "occupied")
+        self.assertEqual(result["intents"]["br"]["power_request"], "hold")
 
     def test_stale_core_input_produces_hold_intent(self):
         stale = int(time.time()) - climate_intent.INPUT_MAX_AGE_SECONDS - 1
@@ -116,9 +127,9 @@ class ClimateDecisionTests(unittest.TestCase):
             payloads = {
                 "room_state.json": {"generated_at": now, "rooms": {"br": {"activity": "occupied"}}},
                 "env_quality.json": {"generated_at": now, "rooms": {"br": {
-                    "condition": ["舒适"],
-                    "comfort": "适宜",
-                    "readings": {"temp": 27, "hum": 50, "at": 27},
+                    "condition": ["偏热", "不适宜"],
+                    "comfort": "不适宜",
+                    "readings": {"temp": 28.5, "hum": 50, "at": 28.5},
                     "thresholds": {"at_max": 27.5, "temp_max": 28},
                 }}},
                 "climate_intent.json": {"generated_at": now, "intents": {"br": {
@@ -147,6 +158,57 @@ class ClimateDecisionTests(unittest.TestCase):
 
         act.assert_not_called()
         self.assertEqual(result["rooms"]["br"]["decision"], "关机未满30分钟→不控")
+
+    def test_fresh_air_is_tried_before_starting_air_conditioner(self):
+        now = int(time.time())
+        changed = datetime.fromtimestamp(now - 3600).astimezone().isoformat()
+        config = dict(climate_engine.DEFAULTS, rooms=["br"])
+
+        def load_state(name):
+            payloads = {
+                "room_state.json": {"generated_at": now, "rooms": {"br": {"activity": "occupied"}}},
+                "env_quality.json": {"generated_at": now, "rooms": {"br": {
+                    "condition": ["偏热", "不适宜"],
+                    "comfort": "不适宜",
+                    "readings": {"temp": 28.5, "hum": 60, "at": 28.5},
+                    "thresholds": {"at_max": 27.5, "temp_max": 28},
+                }}},
+                "climate_intent.json": {"generated_at": now, "intents": {"br": {
+                    "purpose": "comfort", "comfort_target": 27.5,
+                }}},
+                "external_env.json": {"generated_at": now, "fresh_eligible": True,
+                                      "current": {"temp": 22, "abs_humidity": 10}},
+                "device_protection.json": {"devices": {"br_ac": {
+                    "switch": "off", "climate_state": "off", "ac_set_temp": "27",
+                }}},
+            }
+            return payloads.get(name, {})
+
+        with tempfile.TemporaryDirectory() as state_dir, \
+                mock.patch.object(climate_engine, "STATE_DIR", state_dir), \
+                mock.patch.object(climate_engine, "_cfg", return_value=config), \
+                mock.patch.object(climate_engine, "_load_json", side_effect=load_state), \
+                mock.patch.object(climate_engine, "get_state", return_value="off"), \
+                mock.patch.object(climate_engine, "get_attr", return_value=""), \
+                mock.patch.object(climate_engine, "get_state_full", return_value={
+                    "state": "off", "last_changed": changed,
+                }), \
+                mock.patch.object(climate_engine.time, "time", return_value=now) as clock, \
+                mock.patch.object(climate_engine, "_write_snapshot"), \
+                mock.patch.object(climate_engine, "_act", return_value="on") as act:
+            result = climate_engine.run()
+
+            act.assert_any_call(climate_engine.FRESH_DEV, "on")
+            self.assertFalse(any(call.args and call.args[0] == "br_ac" for call in act.call_args_list))
+            self.assertEqual(result["rooms"]["br"]["decision"], "新风优先观察→空调保持关")
+
+            # 新风持续未确认启动时，不重置首次尝试时间；超过宽限期由 AC 兜底。
+            act.reset_mock()
+            clock.return_value = now + climate_engine.FRESH_START_GRACE_SECONDS + 1
+            climate_engine.run()
+
+        act.assert_any_call(climate_engine.FRESH_DEV, "on")
+        self.assertTrue(any(call.args and call.args[0] == "br_ac" for call in act.call_args_list))
 
     def test_disabled_marker_waits_for_confirmed_off(self):
         with tempfile.TemporaryDirectory() as state_dir, \

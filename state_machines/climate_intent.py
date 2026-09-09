@@ -42,6 +42,13 @@ def _is_fresh(payload: dict, max_age: int = INPUT_MAX_AGE_SECONDS) -> bool:
     return 0 <= age <= max_age
 
 
+def _automatic_power_request(conditions: list) -> str:
+    """与执行层一致：冷状态、舒适、偏湿或仅空气问题都不请求自动开机。"""
+    if "偏冷" in conditions or "过冷" in conditions:
+        return "hold"
+    return "on" if any(state in conditions for state in ("偏热", "过热", "过湿")) else "hold"
+
+
 def run() -> dict:
     """Generate climate intent for all controlled rooms. Returns {ts, intents: {room: {...}}}."""
     room_state_data = _load("room_state.json")
@@ -154,7 +161,7 @@ def run() -> dict:
                 "purpose": "sleeping",
                 "comfort_target": sleep_target,
                 "hvac_preference": "cool",
-                "power_request": "on",
+                "power_request": _automatic_power_request(conditions),
                 "priority": 3,
                 "reason": reason,
                 "source": ["room_state"],
@@ -184,7 +191,7 @@ def run() -> dict:
                 "purpose": "comfort",
                 "comfort_target": 27.5,
                 "hvac_preference": "cool",
-                "power_request": "on",
+                "power_request": _automatic_power_request(conditions),
                 "priority": 4,
                 "reason": "occupied_comfort",
                 "source": ["room_state", "env_quality"],
@@ -206,7 +213,7 @@ def run() -> dict:
                         "purpose": "comfort",
                         "comfort_target": 27.5,
                         "hvac_preference": "cool",
-                        "power_request": "on",
+                        "power_request": _automatic_power_request(conditions),
                         "priority": 4,
                         "reason": "shared_space_comfort",
                         "source": ["room_state"],
@@ -230,7 +237,7 @@ def run() -> dict:
             "purpose": "comfort",
             "comfort_target": 27.5,
             "hvac_preference": "cool",
-            "power_request": "on",
+            "power_request": _automatic_power_request(conditions),
             "priority": 5,
             "reason": "fallback",
             "source": ["room_state"],

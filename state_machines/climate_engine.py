@@ -48,6 +48,7 @@ DEFAULTS = {
     "suite_bath": {},
 }
 INPUT_MAX_AGE_SECONDS = 180
+FRESH_START_GRACE_SECONDS = 120
 
 _DRY = True
 
@@ -303,8 +304,11 @@ def _energy_save_from_intent(intent: dict, fallback: bool) -> bool:
 
 
 def _automatic_cooling_allowed(conditions: list) -> bool:
-    """Never auto-start cooling while the room is already cold."""
-    return "偏冷" not in conditions and "过冷" not in conditions
+    """仅在存在明确制冷/除湿需求时自动开机；舒适或仅空气问题时保持关机。"""
+    if "偏冷" in conditions or "过冷" in conditions:
+        return False
+    # 对齐 _determine_mode：偏湿先交给新风/独立除湿机，只有过湿才允许 AC dry。
+    return any(state in conditions for state in ("偏热", "过热", "过湿"))
 
 
 
@@ -349,8 +353,11 @@ def _dispatch_ac(r, on_units, devs, new_sp, zone_mode, reason,
             acted += 1
             if need_m: mode_acted += 1
     if acted:
-        try: open(ts_f, "w").write(str(now_ts))
-        except OSError: pass
+        try:
+            with open(ts_f, "w") as f:
+                f.write(str(now_ts))
+        except OSError:
+            pass
         parts = []
         if mode_acted: parts.append(f"→{zone_mode}模式(×{mode_acted})")
         if acted > mode_acted or mode_acted == 0:
@@ -443,6 +450,7 @@ def run() -> dict:
     # ═══ 新风（全屋，按 br/st 需求）═══
     fresh_state = get_state(FRESH_SWITCH)
     fresh_since_f = os.path.join(STATE_DIR, "engine_fresh_since")
+    fresh_attempt_f = os.path.join(STATE_DIR, "engine_fresh_attempt_since")
     cool_rooms = []
     dehum_need_rooms = []
     co2_high = False
@@ -453,7 +461,17 @@ def run() -> dict:
     fresh_holding = set()
     fresh_target = None
     fresh_desc = "无"
-    if not inputs_fresh:
+    soft_off = _load_json("device_soft_off.json") if os.path.isfile(os.path.join(STATE_DIR, "device_soft_off.json")) else {}
+    if soft_off.get(FRESH_DEV, False):
+        if fresh_state == "on":
+            _act(FRESH_DEV, "off")
+        fresh_desc = "软关跳过"
+        for marker in (fresh_since_f, fresh_attempt_f):
+            try:
+                os.remove(marker)
+            except OSError:
+                pass
+    elif not inputs_fresh:
         fresh_desc = "输入数据过期→不控"
     else:
         cool_rooms = [r for r in rooms if "偏热" in cond(r) or "过热" in cond(r)]
@@ -475,15 +493,35 @@ def run() -> dict:
             fresh_target = "on"
             now = int(time.time())
             if fresh_state != "on":
-                with open(fresh_since_f, "w") as f:
-                    f.write(str(now))
-                fresh_holding = hold_eligible
+                try:
+                    with open(fresh_attempt_f) as f:
+                        attempt_since = int(f.read().strip())
+                except Exception:
+                    attempt_since = now
+                    with open(fresh_attempt_f, "w") as f:
+                        f.write(str(now))
+                # 新风未确认启动时只给短暂执行窗口；故障时不能无限阻止 AC 兜底。
+                if (now - attempt_since) < FRESH_START_GRACE_SECONDS:
+                    fresh_holding = hold_eligible
+                try:
+                    os.remove(fresh_since_f)
+                except OSError:
+                    pass
             else:
                 try:
-                    since = int(open(fresh_since_f).read().strip())
+                    os.remove(fresh_attempt_f)
+                except OSError:
+                    pass
+                try:
+                    with open(fresh_since_f) as f:
+                        since = int(f.read().strip())
                 except Exception:
                     since = 0
-                if since and (now - since) < cfg["fresh_observe_min"] * 60:
+                if not since:
+                    with open(fresh_since_f, "w") as f:
+                        f.write(str(now))
+                    fresh_holding = hold_eligible
+                elif (now - since) < cfg["fresh_observe_min"] * 60:
                     fresh_holding = hold_eligible
         else:
             if fresh_state == "on":
@@ -492,13 +530,12 @@ def run() -> dict:
                 os.remove(fresh_since_f)
             except OSError:
                 pass
+            try:
+                os.remove(fresh_attempt_f)
+            except OSError:
+                pass
 
-        soft_off = _load_json("device_soft_off.json") if os.path.isfile(os.path.join(STATE_DIR, "device_soft_off.json")) else {}
-        if soft_off.get(FRESH_DEV, False):
-            if fresh_state == "on":
-                _act(FRESH_DEV, "off")
-            fresh_desc = "软关跳过"
-        elif fresh_target == "on":
+        if fresh_target == "on":
             fresh_desc = _act(FRESH_DEV, "on")
         elif fresh_target == "off":
             fresh_desc = _act(FRESH_DEV, "off")
@@ -583,6 +620,14 @@ def run() -> dict:
             _e_save = _energy_save_from_intent(
                 intent, _energy_save_for(r, act, c, activity, cond))
             need_on = not _e_save and _automatic_cooling_allowed(c)
+            if need_on and r in fresh_holding:
+                decisions[r] = "新风优先观察→空调保持关"
+                room_modes[r] = "新风"
+                try:
+                    os.remove(os.path.join(STATE_DIR, f"engine_{r}_eco_since"))
+                except OSError:
+                    pass
+                continue
             # 检测待机状态（即使 AC 关了也要维护 room_modes）
             _is_standby = False
             if _e_save:
