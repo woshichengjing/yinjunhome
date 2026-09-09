@@ -82,6 +82,34 @@ class ClimateDecisionTests(unittest.TestCase):
         self.assertEqual(result["intents"]["br"]["occupancy"], "occupied")
         self.assertEqual(result["intents"]["br"]["power_request"], "hold")
 
+    def test_energy_intents_never_request_power_on(self):
+        now = int(time.time())
+        room_state = {"generated_at": now, "rooms": {
+            "br": {"activity": "occupied"},
+            "st": {"activity": "empty"},
+        }}
+        env_state = {"generated_at": now, "rooms": {
+            "br": {"condition": ["跑温", "偏热"], "readings": {}, "thresholds": {}},
+            "st": {"condition": ["舒适"], "readings": {}, "thresholds": {}},
+        }}
+
+        def load_state(name):
+            if name == "room_state.json":
+                return room_state
+            if name == "env_quality.json":
+                return env_state
+            return {}
+
+        with tempfile.TemporaryDirectory() as state_dir, \
+                mock.patch.object(climate_intent, "STATE_DIR", state_dir), \
+                mock.patch.object(climate_intent, "_load", side_effect=load_state):
+            result = climate_intent.run()
+
+        self.assertEqual(result["intents"]["br"]["reason"], "occupied_runaway")
+        self.assertEqual(result["intents"]["br"]["power_request"], "hold")
+        self.assertEqual(result["intents"]["st"]["reason"], "energy_empty")
+        self.assertEqual(result["intents"]["st"]["power_request"], "hold")
+
     def test_stale_core_input_produces_hold_intent(self):
         stale = int(time.time()) - climate_intent.INPUT_MAX_AGE_SECONDS - 1
 
