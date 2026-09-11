@@ -117,7 +117,8 @@ ha-controller (60s)      →  state_*.json（env_quality / device_protection / c
 | `energy_temp`（节能/空房） | 30°C | |
 | `unloaded_off_min` | 30 分钟 | 房间达标且连续卸载后关机；带载/不适/数据中断重计 |
 | `auto_start_confirm_min` | 3 分钟 | 确认有人且持续需求；entering 不授权开机 |
-| 死区 | `[at_comfort - 0.5, at_comfort]` | |
+| 舒适带 | `(at_comfort - 0.5, at_comfort]` | 下边界属于偏冷主动回升 |
+| 偏冷主动回升 | `sense_temp <= at_comfort - 0.5` | 制冷时取 `max(原设定点, ceil(回风), round(at_comfort-0.5))`，不得合并进舒适保持分支 |
 | `comfort` 下限 | `max(20, at_comfort)` | |
 | `setpoint_min` / `setpoint_max` | 16 / 32 | 设定点硬边界，step=1 |
 | 设定点换算 | `ideal = round(comfort + ac_cur - sense_temp)` | 体感偏差 → 设定点 |

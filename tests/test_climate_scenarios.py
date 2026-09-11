@@ -483,6 +483,34 @@ class ClimateScenarioTests(unittest.TestCase):
         sp, _ = engine._compute_setpoint(30, 30, True, True, 29, 32, 28, False, 16, 32)
         self.assertGreaterEqual(sp, 29)
 
+    def test_cold_setpoint_recovery_is_separate_from_comfort_band(self):
+        for target, sense, reference, current, expected in (
+                (28.5, 25.6, 26, 25, 28),  # 用户主卧反馈：必须主动回升。
+                (28.5, 28.0, 26, 25, 28),  # 恰好低于目标 0.5°C 也属于偏冷。
+                (28.5, 28.01, 26, 25, 26), # 舒适带不套用偏冷回升。
+                (27.5, 27.0, 26, 25, 27),  # 普通有人目标同样适用。
+                (28.5, 25.6, 30, 25, 30),  # 不降低用户原本更高的设定点。
+                (28.5, 25.6, 26, 29, 29)): # 回风较高时仍要抬至可卸载水平。
+            with self.subTest(target=target, sense=sense, reference=reference, current=current):
+                point, reason = engine._compute_setpoint(
+                    target, target, False, True, current, sense, reference, False, 16, 32)
+                self.assertEqual(point, expected)
+                if expected > reference:
+                    self.assertEqual(reason, "校准回升")
+
+    def test_sleeping_bedroom_cold_recovery_reaches_device_queue(self):
+        self.now -= 8 * 3600  # 北京时间 04:00，睡眠目标 28.5°C。
+        self.activities["br"]["activity"] = "sleeping"
+        self.env["br"] = self.environment(["舒适"], 25.6, "适宜")
+        self.running(action="cooling", current=25, target=26)
+        self.live["br_ac"]["last_changed"] = self.changed(-3600)
+        result = self.tick()
+        action = self.queued()
+        self.assertIsNotNone(action)
+        self.assertEqual(action["action"], "set")
+        self.assertEqual(action["temp"], 28)
+        self.assertIn("校准回升", result["rooms"]["br"]["decision"])
+
 
 if __name__ == "__main__":
     unittest.main()

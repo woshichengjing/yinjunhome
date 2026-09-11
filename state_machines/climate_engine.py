@@ -215,8 +215,13 @@ def _compute_setpoint(comfort, at_comfort, energy_save, is_cool,
         reason = "节能卸载"
     elif ac_cur is None or sense_temp is None:
         reason = "缺温度→维持"
+    elif is_cool and sense_temp <= at_comfort - 0.5:
+        # 明显低于体感目标时主动回升，不能仅凭回风已低于设定点就保持原值。
+        # 同时保留较高的原设定点和回风卸载线，避免回升反而变成降温。
+        new_sp = max(ref_sp, int(math.ceil(ac_cur)), round(at_comfort - 0.5))
+        reason = "校准回升" if new_sp > ref_sp else "偏冷保持"
     elif is_cool and sense_temp <= at_comfort:
-        # 达标/偏冷只卸载或保持，绝不能把较高设定点反向降回 27/28°C。
+        # 只有 (目标-0.5, 目标] 属于舒适带，只卸载或保持。
         new_sp = max(ref_sp, int(math.ceil(ac_cur)))
         reason = "停机卸载" if new_sp > ref_sp else ("节能保持" if energy_save else "已舒适")
     else:
