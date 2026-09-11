@@ -5,6 +5,7 @@
 import json, os, time
 from datetime import datetime
 from state_machines.climate_policy import cooling_allowed, has_runaway, guest_active
+from state_machines.control_switches import read_control_switches
 
 STATE_DIR = "/tmp/hermes_states"
 CONFIG_FILE = os.path.expanduser("~/.hermes/scripts/data/climate_config.json")
@@ -59,8 +60,6 @@ def run() -> dict:
         stale_inputs.append("room_state")
     if not _is_fresh(env_data):
         stale_inputs.append("env_quality")
-    soft_off = _load("device_soft_off.json")
-    ac_disabled = _load("ac_disabled.json")
     suite_bath = _load_engine_config().get("suite_bath", {})
 
     hour = datetime.now().hour
@@ -96,8 +95,9 @@ def run() -> dict:
         rh_val = readings.get("hum")
 
         # ── P0: 设备安全 ──
+        switches = read_control_switches(STATE_DIR, room + "_ac")
         # 禁用
-        if ac_disabled.get(room, False):
+        if switches["room_disabled"] is True:
             intents[room] = {
                 "occupancy": activity,
                 "purpose": "disabled",
@@ -111,10 +111,7 @@ def run() -> dict:
             continue
 
         # 软关
-        ac_ids = {"br": "br_ac", "st": "st_ac", "lr": "lr_ac",
-                   "dr": "dr_ac", "nb": "nb_ac", "sb": "sb_ac"}
-        ac_id = ac_ids.get(room, f"{room}_ac")
-        if soft_off.get(ac_id, False):
+        if switches["device_soft_off"] is True:
             intents[room] = {
                 "occupancy": activity,
                 "purpose": "soft_off",
@@ -124,6 +121,14 @@ def run() -> dict:
                 "priority": 1,
                 "reason": "soft_off",
                 "source": ["device_soft_off"],
+            }
+            continue
+
+        if not switches["automation_allowed"]:
+            intents[room] = {
+                "occupancy": activity, "purpose": "switch_state_unknown",
+                "comfort_target": None, "hvac_preference": "hold", "power_request": "hold",
+                "priority": 0, "reason": "switch_state_unknown", "source": ["control_switches"],
             }
             continue
 

@@ -77,6 +77,8 @@ class ClimateDecisionTests(unittest.TestCase):
             with mock.patch.object(climate_intent, "STATE_DIR", state_dir), \
                     mock.patch.object(climate_intent, "_load", side_effect=load_state), \
                     mock.patch.object(climate_intent, "_load_engine_config", return_value={"suite_bath": {"br": "bath"}}):
+                Path(state_dir, "ac_disabled.json").write_text("{}", encoding="utf-8")
+                Path(state_dir, "device_soft_off.json").write_text("{}", encoding="utf-8")
                 result = climate_intent.run()
         self.assertEqual(result["intents"]["br"]["purpose"], "comfort")
         self.assertEqual(result["intents"]["br"]["occupancy"], "occupied")
@@ -103,6 +105,8 @@ class ClimateDecisionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as state_dir, \
                 mock.patch.object(climate_intent, "STATE_DIR", state_dir), \
                 mock.patch.object(climate_intent, "_load", side_effect=load_state):
+            Path(state_dir, "ac_disabled.json").write_text("{}", encoding="utf-8")
+            Path(state_dir, "device_soft_off.json").write_text("{}", encoding="utf-8")
             result = climate_intent.run()
 
         self.assertEqual(result["intents"]["br"]["reason"], "occupied_runaway")
@@ -182,6 +186,8 @@ class ClimateDecisionTests(unittest.TestCase):
                 }), \
                 mock.patch.object(climate_engine, "_write_snapshot"), \
                 mock.patch.object(climate_engine, "_act") as act:
+            Path(state_dir, "ac_disabled.json").write_text("{}", encoding="utf-8")
+            Path(state_dir, "device_soft_off.json").write_text("{}", encoding="utf-8")
             result = climate_engine.run()
 
         act.assert_not_called()
@@ -224,6 +230,8 @@ class ClimateDecisionTests(unittest.TestCase):
                 mock.patch.object(climate_engine.time, "time", return_value=now) as clock, \
                 mock.patch.object(climate_engine, "_write_snapshot"), \
                 mock.patch.object(climate_engine, "_act", return_value="on") as act:
+            Path(state_dir, "ac_disabled.json").write_text("{}", encoding="utf-8")
+            Path(state_dir, "device_soft_off.json").write_text("{}", encoding="utf-8")
             result = climate_engine.run()
 
             act.assert_any_call(climate_engine.FRESH_DEV, "on")

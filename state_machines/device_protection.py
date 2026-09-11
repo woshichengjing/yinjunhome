@@ -15,6 +15,7 @@
 import json, os, tempfile, time
 from datetime import datetime
 import http.client
+from state_machines.control_switches import read_control_switches, automatic_action_blocked
 
 os.environ["TZ"] = "Asia/Shanghai"
 time.tzset()
@@ -94,10 +95,13 @@ def submit_action(dev_id: str, action: str, temp: int = None, mode: str = None, 
     fan:    风速 自动/低风/中风/高风（on/set 时使用，None=不改）
     force:  强制重发硬上电(无视proxy的on、绕过保护窗)，用于代理失真恢复
     """
+    if automatic_action_blocked(STATE_DIR, dev_id, {"action": action, "source": source}):
+        cancel_engine_action(dev_id)
+        return False
     action_file = os.path.join(STATE_DIR, f"{dev_id}_action.json")
     pending = _load_action(dev_id) if source == "engine" else None
     if pending and pending.get("source") != "engine":
-        return  # 用户排队指令优先，不被每分钟的自动决策覆盖。
+        return False  # 用户排队指令优先，不被每分钟的自动决策覆盖。
     data = {
         "action": action,
         "temp": temp,
@@ -118,6 +122,7 @@ def submit_action(dev_id: str, action: str, temp: int = None, mode: str = None, 
         if temporary and os.path.exists(temporary):
             try: os.remove(temporary)
             except OSError: pass
+    return True
 
 
 def _load_action(dev_id: str) -> dict | None:
@@ -136,6 +141,9 @@ def _load_action(dev_id: str) -> dict | None:
         if created <= 0 or age < 0 or age > max_age:
             _clear_action(dev_id)
             print(f"[queue] expired action discarded: {dev_id}", flush=True)
+            return None
+        if automatic_action_blocked(STATE_DIR, dev_id, action):
+            _clear_action(dev_id)
             return None
         return action
     except (json.JSONDecodeError, OSError, TypeError, ValueError):
@@ -231,6 +239,10 @@ def _execute_action(dev_id: str, dev: dict, action: dict, protect: bool = True) 
     act = action["action"]
     climate = dev["climate"]
 
+    if automatic_action_blocked(STATE_DIR, dev_id, action):
+        _clear_action(dev_id)
+        return False
+
     if action.get("source") == "engine":
         # 决策与执行之间用户可能刚关机或切到手动模式；set 不得唤醒已关设备。
         live = _ha_req("GET", f"/api/states/{climate}") or {}
@@ -253,6 +265,11 @@ def _execute_action(dev_id: str, dev: dict, action: dict, protect: bool = True) 
         if not permitted:
             _clear_action(dev_id)
             return False
+
+    # HA 回读期间面板也可能刚被关掉，在第一个设备写操作之前再次核对。
+    if automatic_action_blocked(STATE_DIR, dev_id, action):
+        _clear_action(dev_id)
+        return False
 
     if DRY_RUN:
         print(f"[DRY_RUN] {dev_id}: {_action_desc(action)} → 跳过执行")
@@ -413,6 +430,7 @@ def evaluate_device(dev_id: str, dev: dict) -> dict:
             "next_action": "无", "protection_ends_at": 0,
         }
         result["last_changed"] = get_last_changed(entity)
+        result["control_switches"] = read_control_switches(STATE_DIR, dev_id)
         blocked, remaining, ends_at = _protection(dev_id)
         result["restart_blocked"] = blocked
         result["restart_remaining_min"] = remaining
@@ -473,6 +491,7 @@ def evaluate_device(dev_id: str, dev: dict) -> dict:
             "energy_optimal": True, "energy_note": "运行中" if sw == "on" else "待机",
             "next_action": "无", "protection_ends_at": 0,
             "last_changed": get_last_changed(dev["switch"]),
+            "control_switches": read_control_switches(STATE_DIR, dev_id),
         }
         action = _load_action(dev_id)
         if action:
@@ -520,6 +539,7 @@ def evaluate_device(dev_id: str, dev: dict) -> dict:
         "climate_state": climate_state,
         "ac_cur_temp": ac_cur,
         "ac_set_temp": ac_set,
+        "control_switches": read_control_switches(STATE_DIR, dev_id),
     }
 
     # 压缩机负载

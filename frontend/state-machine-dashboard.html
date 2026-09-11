@@ -152,6 +152,7 @@ h1{font-size:22px;color:#58a6ff;margin-bottom:4px}
 <link rel="stylesheet" href="/static/weather-forecast.css?v=20260906">
 <link rel="stylesheet" href="/static/wall-theme.css?v=20260906-10">
 <script src="/static/weather-forecast.js?v=20260906-4" defer></script>
+<script src="/static/control-switches.js?v=20260911"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 </head>
@@ -402,30 +403,47 @@ if(CD<=0){CD=30;load();}
 
 var TOGGLE_URL='/api/toggle';
 
-// 设备软关：定时轮询绑定点击 + 加载状态
+function controlNotice(message){
+  var box=document.getElementById('control-switch-notice');
+  if(!box){box=document.createElement('div');box.id='control-switch-notice';box.setAttribute('role','status');
+    box.style.cssText='position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:99999;padding:12px 18px;background:#161b22;color:#f0c46a;border:1px solid #7c693b;border-radius:10px;max-width:80vw;font-size:14px';document.body.appendChild(box);}
+  box.textContent=message;
+}
+function paintControlSwitches(){
+  document.querySelectorAll('.dev-soft-btn,.ac-ctrl-toggle').forEach(function(btn){
+    var room=btn.dataset.room, dev=room?room+'_ac':btn.dataset.dev;
+    var flag=room?'room_disabled':'device_soft_off';
+    var state=window.ControlSwitches?ControlSwitches.value(dev,flag):null;
+    var pending=window.ControlSwitches&&ControlSwitches.isPending(dev,flag);
+    btn.disabled=!!pending||!window.ControlSwitches;
+    btn.classList.toggle('on',state===false&&!pending);
+    btn.classList.toggle('off',state===true&&!pending);
+    btn.classList.toggle('control-unknown',state===null||!!pending);
+    btn.setAttribute('aria-busy',pending?'true':'false');
+    btn.title=pending?'正在等待温控程序确认':state===null?'开关状态未确认，点击请求关闭自动控制':state?'自动控制已关闭':'自动控制已开启';
+    btn.setAttribute('aria-label',btn.title);
+    if(!room)btn.textContent=pending?'…':state===null?'?':'⏻';
+  });
+}
+function changeControlSwitch(dev,flag,url){
+  if(!window.ControlSwitches){controlNotice('开关组件未加载，请刷新页面');return;}
+  var disabled=ControlSwitches.value(dev,flag)!==true;
+  var target=url+(flag==='room_disabled'?(disabled?'off':'on'):String(disabled));
+  ControlSwitches.change(dev,flag,disabled,target).then(function(){
+    controlNotice(disabled?'温控程序已确认：自动控制关闭':'温控程序已确认：自动控制开启');
+  }).catch(function(error){controlNotice(error.message);});
+  paintControlSwitches();
+}
+window.addEventListener('control-switches-updated',paintControlSwitches);
+document.addEventListener('click',function(e){
+  var btn=e.target.closest('.dev-soft-btn');
+  if(!btn)return;
+  e.stopPropagation();
+  changeControlSwitch(btn.dataset.dev,'device_soft_off',TOGGLE_URL+'/device/'+encodeURIComponent(btn.dataset.dev)+'?state=');
+});
 setInterval(function(){
-  var btns=document.querySelectorAll('.dev-soft-btn:not([data-bound])');
-  if(btns.length){
-    // 从同源静态文件读取状态
-    fetch('/static/data/device_soft_off.json?t='+Date.now()).then(function(r){return r.json()}).then(function(so){
-      for(var i=0;i<btns.length;i++){
-        var btn=btns[i];
-        btn.setAttribute('data-bound','1');
-        if(so[btn.dataset.dev]){btn.classList.add('off');}
-        else{btn.classList.remove('off');}
-        btn.onclick=function(e){
-          e.stopPropagation();
-          var dev=this.dataset.dev;
-          var next=this.classList.contains('off')?'false':'true';
-          var self=this;
-          fetch(TOGGLE_URL+'/device/'+dev+'?state='+next,{method:'POST'}).then(function(r){return r.json()}).then(function(d){
-            if(d[dev]){self.classList.add('off');}
-            else{self.classList.remove('off');}
-          });
-        };
-      }
-    }).catch(function(){});
-  }
+  paintControlSwitches();
+  if(window.ControlSwitches&&document.querySelector('.dev-soft-btn,.ac-ctrl-toggle'))ControlSwitches.refresh().catch(function(){});
 },1000);
 
 var HA_TOKEN='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI0ZTU1OTc3MGQ2MDA0ZTJiOGMwZGI5OTA3MGE2NTlkYiIsImlhdCI6MTcyMTAxNjI1NywiZXhwIjoyMDM2Mzc2MjU3fQ.NPtjYj1oL3jqC1iNI5YaHJKdFIAXKYhg6Y3DEsGlKF0';
@@ -773,6 +791,8 @@ var s=document.createElement('style');s.textContent=
 '.ac-ctrl-toggle::after{content:\"\";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#c9d1d9;transition:left .2s}'+
 '.ac-ctrl-toggle.on{background:#3fb950}'+
 '.ac-ctrl-toggle.on::after{left:22px;background:#fff}'+
+'.ac-ctrl-toggle.control-unknown{background:#65552c}.ac-ctrl-toggle.control-unknown::after{left:12px;background:#f0c46a}'+
+'.dev-soft-btn.control-unknown{color:#f0c46a;border-color:#7c693b;background:rgba(240,196,106,.1)}'+
 '.dev-soft-btn{background:rgba(63,185,80,.1);border:1px solid #3fb950;color:#3fb950;cursor:pointer;font-size:11px;padding:1px 8px;border-radius:4px;font-weight:bold;transition:all .2s}'+
 '.dev-soft-btn:hover{opacity:.8}'+
 '.dev-soft-btn.off{color:#f85149;border-color:#f85149;background:rgba(248,81,73,.1)}';
@@ -1478,34 +1498,25 @@ _loaded=true;
 }
 
 function loadAcSwitches(){
-fetch('/static/data/ac_disabled.json?t='+Date.now())
-.then(function(r){return r.json();})
-.then(function(data){
 var html='';
 var keys=Object.keys(AC_ROOMS);
 for(var i=0;i<keys.length;i++){
 var rk=keys[i];
-var off=data[rk]||false;
 html+='<div class="ac-ctrl-item">'+
 '<span class="ac-name">'+EMO(AC_ICONS[rk])+' '+AC_ROOMS[rk]+'</span>'+
-'<button class="ac-ctrl-toggle'+(off?'':' on')+'" data-room="'+rk+'"></button>'+
+'<button class="ac-ctrl-toggle control-unknown" data-room="'+rk+'" aria-label="开关状态未确认"></button>'+
 '</div>';
 }
 document.getElementById('ac-ctrl-list').innerHTML=html;
-}).catch(function(){});
+paintControlSwitches();
+if(window.ControlSwitches)ControlSwitches.refresh(true).catch(function(error){controlNotice(error.message);});
 }
 
 document.getElementById('ac-ctrl-list').addEventListener('click',function(e){
 var btn=e.target.closest('.ac-ctrl-toggle');
 if(!btn)return;
 var room=btn.dataset.room;
-var on=btn.classList.contains('on');
-var next=on?'off':'on';
-fetch(TOGGLE_URL+'/'+room+'?state='+next,{method:'POST'})
-.then(function(r){return r.json();})
-.then(function(){
-btn.classList.toggle('on',next==='on');
-}).catch(function(){});
+changeControlSwitch(room+'_ac','room_disabled',TOGGLE_URL+'/'+encodeURIComponent(room)+'?state=');
 });
 })();
 

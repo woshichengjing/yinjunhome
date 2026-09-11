@@ -167,6 +167,7 @@ def main():
     sync_file("standby_schedule.json", "standby_schedule.json")
     sync_file("precool_schedule.json", "precool_schedule.json")
     sync_file("ac_disabled.json", "ac_disabled.json")
+    sync_file("device_soft_off.json", "device_soft_off.json")
 
     # ── 6. 传感器快照 ──
     try:

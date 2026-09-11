@@ -25,6 +25,8 @@ class ClimateScenarioTests(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
+        self.write("ac_disabled.json", {})
+        self.write("device_soft_off.json", {})
         self.now = datetime(2026, 9, 11, 12, tzinfo=timezone(timedelta(hours=8))).timestamp()
         self.start = self.now
         self.cfg = dict(engine.DEFAULTS, rooms=["br"])
@@ -310,6 +312,99 @@ class ClimateScenarioTests(unittest.TestCase):
         for _ in range(5):
             self.tick(60)
             self.assertIsNone(self.queued())
+
+    def test_closed_switch_blocks_submission_and_discards_old_on_and_set(self):
+        for filename, flags in (("ac_disabled.json", {"br": True}),
+                                ("device_soft_off.json", {"br_ac": True})):
+            for action in ("on", "set"):
+                with self.subTest(file=filename, action=action):
+                    self.write("ac_disabled.json", {})
+                    self.write("device_soft_off.json", {})
+                    self.assertTrue(devices.submit_action("br_ac", action, source="engine"))
+                    self.write(filename, flags)
+                    self.assertIsNone(self.queued())
+                    self.assertFalse(devices.submit_action("br_ac", action, source="engine", force=True))
+                    self.assertFalse((self.root / "br_ac_action.json").exists())
+
+    def test_switch_closed_after_queue_read_prevents_execution(self):
+        for filename, flags in (("ac_disabled.json", {"br": True}),
+                                ("device_soft_off.json", {"br_ac": True})):
+            self.write("ac_disabled.json", {})
+            self.write("device_soft_off.json", {})
+            devices.submit_action("br_ac", "on", source="engine")
+            action = self.queued()
+            self.write(filename, flags)
+            with mock.patch.object(devices, "_ha_req") as request, \
+                    mock.patch.object(devices, "ha_post") as post:
+                self.assertFalse(devices._execute_action("br_ac", devices.DEVICES["br_ac"], action))
+            request.assert_not_called()
+            post.assert_not_called()
+
+    def test_switch_closed_during_live_ha_read_prevents_start(self):
+        devices.submit_action("br_ac", "on", source="engine")
+        action = self.queued()
+
+        def live_read(*args):
+            self.write("device_soft_off.json", {"br_ac": True})
+            return self.live["br_ac"]
+
+        with mock.patch.object(devices, "_ha_req", side_effect=live_read), \
+                mock.patch.object(devices, "ha_post") as post:
+            self.assertFalse(devices._execute_action("br_ac", devices.DEVICES["br_ac"], action))
+        post.assert_not_called()
+
+    def test_missing_or_invalid_switch_file_does_not_restore_auto_control(self):
+        for filename in ("ac_disabled.json", "device_soft_off.json"):
+            for content in (None, "{", "[]", '{"br": "false", "br_ac": "false"}'):
+                with self.subTest(file=filename, content=content):
+                    self.write("ac_disabled.json", {})
+                    self.write("device_soft_off.json", {})
+                    if content is None:
+                        (self.root / filename).unlink()
+                    else:
+                        (self.root / filename).write_text(content, encoding="utf-8")
+                    result = self.tick(60)
+                    self.assertIsNone(self.queued())
+                    self.assertFalse(devices.submit_action("br_ac", "on", source="engine"))
+                    self.assertIn("开关状态未知", result["rooms"]["br"]["decision"])
+
+    def test_device_soft_off_also_blocks_fresh_air_and_dehumidifier(self):
+        for device in ("fresh_air", "br_dehum"):
+            self.write("device_soft_off.json", {device: True})
+            self.assertFalse(devices.submit_action(device, "on", source="engine"))
+            self.assertIsNone(self.queued(device))
+            self.assertTrue(devices.submit_action(device, "off", source="engine"))
+            self.assertEqual(self.queued(device)["action"], "off")
+
+    def test_switch_snapshot_reports_controller_observation(self):
+        self.write("ac_disabled.json", {"br": True})
+        self.write("device_soft_off.json", {"br_ac": False})
+        with mock.patch.object(devices, "get_state", return_value="off"), \
+                mock.patch.object(devices, "get_attrs", return_value={}), \
+                mock.patch.object(devices, "get_last_changed", return_value=self.changed(-3600)), \
+                mock.patch.object(devices, "load_config", return_value={}), \
+                mock.patch.object(devices, "_protection", return_value=(False, 0, 0)):
+            result = devices.evaluate_device("br_ac", devices.DEVICES["br_ac"])
+        control = result["control_switches"]
+        self.assertTrue(control["room_disabled"])
+        self.assertFalse(control["device_soft_off"])
+        self.assertFalse(control["automation_allowed"])
+        self.assertEqual(control["observed_at"], int(self.now))
+
+    def test_explicit_reenable_requires_new_demand_confirmation(self):
+        self.tick()
+        for _ in range(3):
+            self.tick(60)
+        self.assertEqual(self.queued()["action"], "on")
+        self.write("device_soft_off.json", {"br_ac": True})
+        self.tick(60)
+        self.assertIsNone(self.queued())
+        self.write("device_soft_off.json", {"br_ac": False})
+        self.tick(60)
+        self.assertIsNone(self.queued())
+        for _ in range(3):
+            self.tick(60)
+        self.assertEqual(self.queued()["action"], "on")
 
     def test_guest_expires_at_end_of_same_night(self):
         self.now += 11 * 3600

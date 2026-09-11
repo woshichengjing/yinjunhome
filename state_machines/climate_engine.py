@@ -31,6 +31,7 @@ if not HASS_TOKEN:
 sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
 from state_machines.device_protection import submit_action, cancel_engine_action, DEVICES
 from state_machines.climate_policy import cooling_allowed, has_runaway, has_occupants, finite_number
+from state_machines.control_switches import read_control_switches
 
 # ── 设备映射 ──（客餐厅已解耦，每台独立控制）
 AC = {"br": ["br_ac"], "st": ["st_ac"], "lr": ["lr_ac"], "dr": ["dr_ac"], "nb": ["nb_ac"], "sb": ["sb_ac"]}
@@ -62,7 +63,8 @@ _DRY = True
 def _load_json(name: str) -> dict:
     try:
         with open(os.path.join(STATE_DIR, name)) as f:
-            return json.load(f)
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
@@ -117,7 +119,8 @@ def _act(dev_id: str, action: str, temp=None, mode=None, fan=None) -> str:
     if _DRY:
         return desc
     # 每轮基于实时设备状态提交；永久签名去重会吞掉失败重试和手动操作后的恢复。
-    submit_action(dev_id, action, temp=temp, mode=mode, fan=fan, source="engine")
+    if submit_action(dev_id, action, temp=temp, mode=mode, fan=fan, source="engine") is False:
+        return desc + "(开关关闭/未知或用户指令优先→未提交)"
     # 记录引擎最后一次动作时间戳（区分手动/自动）
     try:
         with open(os.path.join(STATE_DIR, f"engine_{dev_id}_last_action"), "w") as f:
@@ -572,9 +575,10 @@ def run() -> dict:
                 _continuous_minutes(r, timer, False, now_ts)
 
         # ═══ AC 禁用检查 ═══
-        ac_disabled = _load_json("ac_disabled.json") if os.path.isfile(os.path.join(STATE_DIR, "ac_disabled.json")) else {}
+        switch_states = {d: read_control_switches(STATE_DIR, d) for d in dev_ids}
+        control_status[r] = {"switches": switch_states}
         _disabled_done_f = os.path.join(STATE_DIR, f"engine_{r}_disabled_done")
-        if ac_disabled.get(r, False):
+        if any(s["room_disabled"] is True for s in switch_states.values()):
             for timer in ("unloaded", "demand"):
                 _continuous_minutes(r, timer, False, now_ts)
             # 物理关机只执行一次；实时确认全关后才落完成标记，之后允许用户手动开启。
@@ -583,12 +587,18 @@ def run() -> dict:
             try: os.remove(os.path.join(STATE_DIR, f"engine_{r}_eco_since"))
             except OSError: pass
             continue
-        else:
-            # 解除禁用时清理标记
+        elif all(s["room_disabled"] is False for s in switch_states.values()):
+            # 确认解除禁用时清理标记；读不到文件不等于用户重新开启。
             try: os.remove(_disabled_done_f)
             except OSError: pass
         if not inputs_fresh:
             decisions[r] = "输入数据过期→不控"
+            room_modes[r] = "未知"
+            continue
+        if any(s["blocked_reason"] == "switch_state_unknown" for s in switch_states.values()):
+            for timer in ("unloaded", "demand"):
+                _continuous_minutes(r, timer, False, now_ts)
+            decisions[r] = "自动控制开关状态未知→不控"
             room_modes[r] = "未知"
             continue
         act = activity(r)
@@ -615,10 +625,10 @@ def run() -> dict:
         # 收集开着的机；全关时根据需求决定是否开机
         on_units = [dev_id for dev_id in dev_ids if devs[dev_id].get("switch") == "on"]
         # 设备软关：排除出温控列表，不对它做任何操作
-        _all_soft = all(soft_off.get(dev_id, False) for dev_id in dev_ids)
+        _all_soft = all(switch_states[dev_id]["device_soft_off"] is True for dev_id in dev_ids)
         _filtered = []
         for _did in on_units:
-            if soft_off.get(_did, False):
+            if switch_states[_did]["device_soft_off"] is True:
                 pass  # 软关设备：不控（用户可能手动在用）
             else:
                 _filtered.append(_did)
@@ -671,7 +681,7 @@ def run() -> dict:
             if finite_number(room_at) is not None and room_at <= target:
                 need_on = False
             demand_min = _continuous_minutes(r, "demand", need_on, now_ts)
-            control_status[r] = {"demand_minutes": round(demand_min, 1)}
+            control_status[r].update(demand_minutes=round(demand_min, 1))
             if need_on and r in fresh_holding:
                 decisions[r] = "新风优先观察→空调保持关"
                 room_modes[r] = "新风"
@@ -778,8 +788,8 @@ def run() -> dict:
         unload_minutes = _continuous_minutes(
             r, "unloaded", comfortable_now and all(_is_unloaded(devs[d]) for d in on_units), now_ts,
             session=[devs[d].get("last_changed") for d in on_units])
-        control_status[r] = {"unloaded_minutes": round(unload_minutes, 1),
-                             "unloaded_off_min": cfg["unloaded_off_min"]}
+        control_status[r].update(unloaded_minutes=round(unload_minutes, 1),
+                                 unloaded_off_min=cfg["unloaded_off_min"])
 
         # 节能待机：动态延迟（基于历史习惯，无数据时默认30分钟）
         hour_now = datetime.now().hour
