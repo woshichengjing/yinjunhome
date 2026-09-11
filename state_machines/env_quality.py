@@ -493,7 +493,8 @@ def evaluate_room(room: str) -> dict:
             cond_list.insert(0, "偏湿")
         if contributor == "湿度偏低" and "偏干" not in cond_list and "过干" not in cond_list:
             cond_list.insert(0, "偏干")
-        if "温度" in contributor and "偏热" not in cond_list and "过热" not in cond_list:
+        if ("温度" in contributor and at_val is not None and at_val > thresholds["at_max"]
+                and "偏热" not in cond_list and "过热" not in cond_list):
             cond_list.insert(0, "偏热")
         if co2_poor and "空气污浊" not in cond_list:
             cond_list.insert(0, "空气污浊")

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """空调自动化引擎 v2 — 以设定点、模式和风速控制为主。
 
-自动启停仅用于连续节能待机，以及有人且不偏冷时恢复一台制冷设备。
+自动启停用于跑温停机、连续节能/舒适卸载待机，以及确认有人且持续不适时开一台。
 自动模式只管理制冷/除湿；手动制热不接管。除湿机/新风控制不变。
 """
 import json, os, sys, time, math, urllib.request
@@ -29,7 +29,8 @@ if not HASS_TOKEN:
                     break
 
 sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
-from state_machines.device_protection import submit_action, DEVICES
+from state_machines.device_protection import submit_action, cancel_engine_action, DEVICES
+from state_machines.climate_policy import cooling_allowed, has_runaway, has_occupants, finite_number
 
 # ── 设备映射 ──（客餐厅已解耦，每台独立控制）
 AC = {"br": ["br_ac"], "st": ["st_ac"], "lr": ["lr_ac"], "dr": ["dr_ac"], "nb": ["nb_ac"], "sb": ["sb_ac"]}
@@ -46,6 +47,7 @@ DEFAULTS = {
     "co2_high": 1000, "co2_high_humid": 1200,
     "fresh_cool_delta": 2.0, "dry_tcool_buffer": 1.0, "dry_hysteresis": 0.5,
     "suite_bath": {},
+    "unloaded_off_min": 30, "auto_start_confirm_min": 3,
 }
 INPUT_MAX_AGE_SECONDS = 180
 FRESH_START_GRACE_SECONDS = 120
@@ -114,21 +116,12 @@ def _act(dev_id: str, action: str, temp=None, mode=None, fan=None) -> str:
     desc = action + desc_t + desc_m + desc_f
     if _DRY:
         return desc
-    sigfile = os.path.join(STATE_DIR, f"{dev_id}_engine_last")
-    sig = json.dumps({"a": action, "t": temp, "m": mode, "f": fan}, sort_keys=True)
-    try:
-        if action != "off" and os.path.isfile(sigfile) and open(sigfile).read() == sig:
-            return desc + "(dup)"
-    except OSError:
-        pass
+    # 每轮基于实时设备状态提交；永久签名去重会吞掉失败重试和手动操作后的恢复。
     submit_action(dev_id, action, temp=temp, mode=mode, fan=fan, source="engine")
     # 记录引擎最后一次动作时间戳（区分手动/自动）
     try:
         with open(os.path.join(STATE_DIR, f"engine_{dev_id}_last_action"), "w") as f:
             f.write(str(int(time.time())))
-    except OSError: pass
-    try:
-        with open(sigfile, "w") as f: f.write(sig)
     except OSError: pass
     return desc
 
@@ -157,9 +150,15 @@ def _refresh_ac_states(dev_ids: list, devs: dict) -> bool:
             all_known = False
             continue
         devs.setdefault(dev_id, {})["switch"] = "off" if state == "off" else "on"
-        last_changed = full.get("last_changed", "")
-        if last_changed:
-            devs[dev_id]["last_changed"] = last_changed
+        attrs = full.get("attributes", {})
+        devs[dev_id].update({
+            "climate_state": state,
+            "last_changed": full.get("last_changed", ""),
+            "ac_set_temp": attrs.get("temperature"),
+            "ac_cur_temp": attrs.get("current_temperature"),
+            "hvac_action": attrs.get("hvac_action"),
+            "fan_mode": attrs.get("fan_mode"),
+        })
     return all_known
 
 
@@ -183,7 +182,7 @@ def _handle_disabled_room(room: str, dev_ids: list, devs: dict) -> str:
     return "已禁用"
 
 def _fan_for(activity: str, cond: list, mode: str) -> str:
-    if "过热" in cond: return "高风"
+    if "过热" in cond and _automatic_cooling_allowed(cond): return "高风"
     return "低风"
 
 def _write_snapshot(snap: dict):
@@ -208,22 +207,19 @@ def _compute_setpoint(comfort, at_comfort, energy_save, is_cool,
     """Calculate target setpoint. Pure function. Returns (new_sp, reason)."""
     new_sp = ref_sp
     reason = "维持"
-    if fresh_on:
-        new_sp = round(comfort)
-        reason = "开机置舒适"
+    if energy_save and ac_cur is not None:
+        new_sp = max(ref_sp, int(math.ceil(ac_cur)))
+        reason = "节能卸载"
     elif ac_cur is None or sense_temp is None:
         reason = "缺温度→维持"
-    elif sense_temp is not None and (at_comfort - 0.5) < sense_temp <= at_comfort:
-        if ac_cur is not None and ac_cur > ref_sp:
-            import math
-            new_sp = int(math.ceil(ac_cur))
-            reason = "停机卸载"
-        else:
-            reason = "节能保持" if energy_save else "已舒适"
+    elif is_cool and sense_temp <= at_comfort:
+        # 达标/偏冷只卸载或保持，绝不能把较高设定点反向降回 27/28°C。
+        new_sp = max(ref_sp, int(math.ceil(ac_cur)))
+        reason = "停机卸载" if new_sp > ref_sp else ("节能保持" if energy_save else "已舒适")
     else:
         ideal = round(comfort + ac_cur - sense_temp)
         if is_cool:
-            busy = (ac_cur > ref_sp) and (sense_temp > at_comfort + 0.3)
+            busy = (ac_cur > ref_sp) and (sense_temp > at_comfort)
         else:
             busy = (ac_cur < ref_sp) and (sense_temp < at_comfort - 0.3)
         if busy:
@@ -242,7 +238,8 @@ def _compute_setpoint(comfort, at_comfort, energy_save, is_cool,
     if new_sp == setpoint_min and new_sp < ref_sp:
         reason = "已达下限"
     # 舒适兜底：体感超标但公式未压低 → 强制压低 1°C
-    if sense_temp is not None and sense_temp > at_comfort and new_sp >= ref_sp:
+    if (not energy_save and reason != "运行中等到位" and sense_temp is not None
+            and sense_temp > at_comfort and new_sp >= ref_sp):
         new_sp = max(setpoint_min, ref_sp - 1)
         reason = "舒适强制压低"
     return new_sp, reason
@@ -251,6 +248,8 @@ def _compute_setpoint(comfort, at_comfort, energy_save, is_cool,
 def _determine_mode(c, cur_mode, rt, room_at, tmax, out_temp):
     """Determine target HVAC mode. Pure function. Returns zone_mode string."""
     target_mode = None
+    if any(state in c for state in ("舒适", "偏冷", "过冷", "跑温")):
+        return "cool" if cur_mode == "dry" else cur_mode
     _wet = ("过湿" in c)  # 仅过湿(>80%)触发除湿，偏湿(65-80%)不除湿
     _hot = ("偏热" in c or "过热" in c)
     if "过热" in c:
@@ -277,20 +276,7 @@ def _determine_mode(c, cur_mode, rt, room_at, tmax, out_temp):
 def _energy_save_for(r, act, c, activity_fn, cond_fn):
     """Determine if room should be in energy-saving mode.
     LR/DR use shared-space logic (5-area merge). Returns bool."""
-    ACTIVE_STATES = {"occupied", "sleeping", "chaxi", "resting", "napping",
-                     "using_computer", "watching_movie", "watching_tv"}
-    if r in ("lr", "dr"):
-        other_r = "dr" if r == "lr" else "lr"
-        any_active = (act in ACTIVE_STATES or
-                      activity_fn(other_r) in ACTIVE_STATES or
-                      activity_fn("en") in ACTIVE_STATES or
-                      activity_fn("cr") in ACTIVE_STATES or
-                      activity_fn("kt") in ACTIVE_STATES)
-        any_runaway = ("跑温" in c or "跑温" in cond_fn(other_r) or
-                       "跑温" in cond_fn("en") or "跑温" in cond_fn("cr") or
-                       "跑温" in cond_fn("kt"))
-        return any_runaway or not any_active
-    return ("跑温" in c) or (act not in ACTIVE_STATES)
+    return has_runaway(r, c, cond_fn) or not has_occupants(r, act, activity_fn)
 
 
 def _energy_save_from_intent(intent: dict, fallback: bool) -> bool:
@@ -305,10 +291,45 @@ def _energy_save_from_intent(intent: dict, fallback: bool) -> bool:
 
 def _automatic_cooling_allowed(conditions: list) -> bool:
     """仅在存在明确制冷/除湿需求时自动开机；舒适或仅空气问题时保持关机。"""
-    if "偏冷" in conditions or "过冷" in conditions:
+    return cooling_allowed(conditions)
+
+
+def _continuous_minutes(room, name, eligible, now, session=None):
+    """连续有效采样计时；数据中断、条件失效、开关/模式变化后重新计时。"""
+    path = os.path.join(STATE_DIR, f"engine_{room}_{name}.json")
+    if not eligible:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return 0
+    since = now
+    try:
+        with open(path) as f:
+            previous = json.load(f)
+        if (previous.get("session") == session and 0 <= now - previous["last"] <= INPUT_MAX_AGE_SECONDS
+                and 0 <= previous["since"] <= previous["last"]):
+            since = previous["since"]
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        pass
+    try:
+        with open(path, "w") as f:
+            json.dump({"since": since, "last": now, "session": session}, f)
+    except OSError:
+        return 0
+    return (now - since) / 60
+
+
+def _is_unloaded(device):
+    """优先设备实际 hvac_action；缺失时仅用回风达标作保守估算。"""
+    if device.get("climate_state") not in ("cool", "dry"):
         return False
-    # 对齐 _determine_mode：偏湿先交给新风/独立除湿机，只有过湿才允许 AC dry。
-    return any(state in conditions for state in ("偏热", "过热", "过湿"))
+    action = device.get("hvac_action")
+    if action:
+        return action == "idle"
+    current = finite_number(device.get("ac_cur_temp"))
+    target = finite_number(device.get("ac_set_temp"))
+    return current is not None and target is not None and current <= target
 
 
 
@@ -337,6 +358,12 @@ def _log_comfort_session(r, now_ts, energy_save, on_units, standby, is_comfortab
 def _dispatch_ac(r, on_units, devs, new_sp, zone_mode, reason,
                  standby, energy_save, act, c, comfort, now_ts, decisions, room_modes):
     """Dispatch AC commands and set room mode."""
+    if standby:
+        for d in on_units:
+            _act(d, "off")
+        decisions[r] = reason
+        room_modes[r] = "待机"
+        return
     ts_f = os.path.join(STATE_DIR, f"engine_{r}_sp_ts")
     fan = _fan_for(act, c, zone_mode)
     acted = 0
@@ -347,9 +374,10 @@ def _dispatch_ac(r, on_units, devs, new_sp, zone_mode, reason,
         except (ValueError, TypeError): d_sp = None
         need_m = (d_mode != zone_mode)
         need_t = (d_sp is not None and d_sp != new_sp)
-        if need_m or need_t:
-            _act(d, "on", temp=new_sp if need_t else None,
-                 mode=zone_mode, fan=fan)
+        need_f = devs[d].get("fan_mode") != fan
+        if need_m or need_t or need_f:
+            _act(d, "set", temp=new_sp if need_t else None,
+                 mode=zone_mode if need_m else None, fan=fan if need_f else None)
             acted += 1
             if need_m: mode_acted += 1
     if acted:
@@ -365,13 +393,7 @@ def _dispatch_ac(r, on_units, devs, new_sp, zone_mode, reason,
         decisions[r] = " + ".join(parts)
     else:
         decisions[r] = f"保持{new_sp}({reason})"
-    if r == "br":
-        try:
-            with open("/tmp/br_standby.log", "w") as f:
-                f.write(f"standby={standby} energy_save={energy_save} act={act} on_units={on_units} conf={comfort:.1f}")
-        except: pass
-    if standby: room_modes[r] = "待机"
-    elif energy_save: room_modes[r] = "节能"
+    if energy_save: room_modes[r] = "节能"
     else: room_modes[r] = "舒适"
 
 
@@ -384,6 +406,9 @@ def run() -> dict:
     cfg = _cfg()
     _DRY = bool(cfg["dry_run"])
     rooms = cfg["rooms"]
+    # 上一轮的自动队列必须重判；引擎中途失败也不能留下其他房间的旧开机。
+    for device in [d for ids in AC.values() for d in ids] + [FRESH_DEV, DEHUM_DEV]:
+        cancel_engine_action(device)
 
     # 加载待机调度表
     standby_delays = {}
@@ -441,7 +466,7 @@ def run() -> dict:
         return env.get(r, {}).get("readings", {})
 
     def room_temp(r):
-        return readings(r).get("temp")
+        return finite_number(readings(r).get("temp"))
 
     def room_ah(r):
         rd = readings(r); t, h = rd.get("temp"), rd.get("hum")
@@ -449,7 +474,6 @@ def run() -> dict:
 
     # ═══ 新风（全屋，按 br/st 需求）═══
     fresh_state = get_state(FRESH_SWITCH)
-    fresh_since_f = os.path.join(STATE_DIR, "engine_fresh_since")
     fresh_attempt_f = os.path.join(STATE_DIR, "engine_fresh_attempt_since")
     cool_rooms = []
     dehum_need_rooms = []
@@ -466,7 +490,7 @@ def run() -> dict:
         if fresh_state == "on":
             _act(FRESH_DEV, "off")
         fresh_desc = "软关跳过"
-        for marker in (fresh_since_f, fresh_attempt_f):
+        for marker in (fresh_attempt_f,):
             try:
                 os.remove(marker)
             except OSError:
@@ -474,19 +498,22 @@ def run() -> dict:
     elif not inputs_fresh:
         fresh_desc = "输入数据过期→不控"
     else:
-        cool_rooms = [r for r in rooms if "偏热" in cond(r) or "过热" in cond(r)]
+        cool_rooms = [r for r in rooms if _automatic_cooling_allowed(cond(r))
+                      and ("偏热" in cond(r) or "过热" in cond(r))]
         dehum_need_rooms = [r for r in rooms if "偏湿" in cond(r) or "过湿" in cond(r)]
         indoor_ahs = [room_ah(r) for r in rooms if room_ah(r) is not None]
         outdoor_humid = (out_ah is not None and indoor_ahs and out_ah >= min(indoor_ahs))
         co2_thresh = cfg["co2_high_humid"] if outdoor_humid else cfg["co2_high"]
         co2_high = any((readings(r).get("co2") or 0) > co2_thresh for r in rooms)
         fresh_environment_ok = ext.get("fresh_eligible") is True
-        fresh_cool_ok = fresh_environment_ok and bool(cool_rooms) and all(
-            (room_temp(r) is not None and out_temp < room_temp(r) - cfg["fresh_cool_delta"]) for r in cool_rooms)
+        fresh_cool_rooms = {r for r in cool_rooms if fresh_environment_ok
+                            and finite_number(out_temp) is not None and finite_number(room_temp(r)) is not None
+                            and out_temp <= room_temp(r) - cfg["fresh_cool_delta"]}
+        fresh_cool_ok = bool(fresh_cool_rooms)
         fresh_dehum_ok = fresh_environment_ok and bool(dehum_need_rooms) and out_ah is not None and all(
             (room_ah(r) is not None and out_ah < room_ah(r)) for r in dehum_need_rooms)
         if fresh_cool_ok:
-            hold_eligible |= set(cool_rooms)
+            hold_eligible |= fresh_cool_rooms
         if fresh_dehum_ok:
             hold_eligible |= set(dehum_need_rooms)
         if co2_high or fresh_cool_ok or fresh_dehum_ok:
@@ -502,34 +529,15 @@ def run() -> dict:
                         f.write(str(now))
                 # 新风未确认启动时只给短暂执行窗口；故障时不能无限阻止 AC 兜底。
                 if (now - attempt_since) < FRESH_START_GRACE_SECONDS:
-                    fresh_holding = hold_eligible
-                try:
-                    os.remove(fresh_since_f)
-                except OSError:
-                    pass
+                    fresh_holding = set(hold_eligible)
             else:
                 try:
                     os.remove(fresh_attempt_f)
                 except OSError:
                     pass
-                try:
-                    with open(fresh_since_f) as f:
-                        since = int(f.read().strip())
-                except Exception:
-                    since = 0
-                if not since:
-                    with open(fresh_since_f, "w") as f:
-                        f.write(str(now))
-                    fresh_holding = hold_eligible
-                elif (now - since) < cfg["fresh_observe_min"] * 60:
-                    fresh_holding = hold_eligible
         else:
             if fresh_state == "on":
                 fresh_target = "off"
-            try:
-                os.remove(fresh_since_f)
-            except OSError:
-                pass
             try:
                 os.remove(fresh_attempt_f)
             except OSError:
@@ -540,21 +548,35 @@ def run() -> dict:
         elif fresh_target == "off":
             fresh_desc = _act(FRESH_DEV, "off")
 
-    # ═══ 每区空调：绝不开关机，只调模式+设定点+风速 ═══
-    # 一区可含多台(客餐厅=客厅+餐厅)：同模式/设定/风速同步；只控开着的机，绝不自动开另一台(B版)
+    # 每个房间独立计观察期；关闭、软关或数据失效立即重置。
+    for room in rooms:
+        observing = fresh_state == "on" and room in hold_eligible and fresh_target == "on"
+        elapsed = _continuous_minutes(room, "fresh_observe", observing, int(time.time()))
+        if observing and elapsed < cfg["fresh_observe_min"]:
+            fresh_holding.add(room)
+
+    # 每区独立决策：关机、保持、开机互斥；运行中调整不得隐式开机。
     decisions = {}
     room_modes = {}
+    control_status = {}
     for r in rooms:
         # 每轮重新加载软关状态（面板可能刚操作）
         soft_off = _load_json("device_soft_off.json") if os.path.isfile(os.path.join(STATE_DIR, "device_soft_off.json")) else {}
         dev_ids = AC[r]
         devs = {dev_id: devp.get(dev_id, {}) for dev_id in dev_ids}
         live_devices_known = _refresh_ac_states(dev_ids, devs)
+        now_ts = int(time.time())
+        # 提前清除不连续的证据；正常循环里各分支再更新有效计时。
+        if not inputs_fresh or not live_devices_known:
+            for timer in ("unloaded", "demand"):
+                _continuous_minutes(r, timer, False, now_ts)
 
         # ═══ AC 禁用检查 ═══
         ac_disabled = _load_json("ac_disabled.json") if os.path.isfile(os.path.join(STATE_DIR, "ac_disabled.json")) else {}
         _disabled_done_f = os.path.join(STATE_DIR, f"engine_{r}_disabled_done")
         if ac_disabled.get(r, False):
+            for timer in ("unloaded", "demand"):
+                _continuous_minutes(r, timer, False, now_ts)
             # 物理关机只执行一次；实时确认全关后才落完成标记，之后允许用户手动开启。
             decisions[r] = _handle_disabled_room(r, dev_ids, devs)
             room_modes[r] = "禁用"
@@ -575,7 +597,7 @@ def run() -> dict:
         c = cond(r)
         rt = room_temp(r)
         rd = readings(r)
-        room_at = rd.get("at")      # 体感温度（环境质量已计算）
+        room_at = finite_number(rd.get("at"))  # 体感温度（环境质量已计算）
         th = env.get(r, {}).get("thresholds", {})
         at_max = th.get("at_max", 29)  # 体感舒适上限
         tmax = th.get("temp_max", 27)  # 裸温上限（降级用）
@@ -601,25 +623,55 @@ def run() -> dict:
             else:
                 _filtered.append(_did)
         on_units = _filtered
-        # 待客保护：夜间22-07客餐厅 AC 开着但状态机判无人 → 视为手动开
-        if r in ("lr", "dr") and on_units and act in ("empty", "unknown"):
-            _hour = datetime.now().hour
-            if _hour >= 22 or _hour < 7:
-                _guest_file = os.path.join(STATE_DIR, "guest_mode_today")
-                try:
-                    with open(_guest_file, "w") as f: f.write("1")
-                except OSError: pass
-
         # 所有设备都已软关 → 跳过，不标任何房模
         if _all_soft:
+            for timer in ("unloaded", "demand"):
+                _continuous_minutes(r, timer, False, now_ts)
             room_modes[r] = "软关"
             decisions[r] = "已软关→不控"
             continue
+        runaway = has_runaway(r, c, cond)
+        manual_units = [d for d in on_units if devs[d].get("climate_state") not in ("cool", "dry")]
+        if manual_units:
+            for timer in ("unloaded", "demand"):
+                _continuous_minutes(r, timer, False, now_ts)
+            decisions[r] = "手动模式→不控"
+            room_modes[r] = "手动"
+            continue
+        if runaway:
+            for timer in ("unloaded", "demand"):
+                _continuous_minutes(r, timer, False, now_ts)
+            for d in on_units:
+                _act(d, "off")
+            decisions[r] = "跑温→请求关机" if on_units else "跑温→保持关机"
+            room_modes[r] = "待机"
+            continue
+        # 保留夜间手动待客保护，但本轮立即生效，且只保护正在运行的设备。
+        if r in ("lr", "dr") and on_units and act in ("empty", "unknown"):
+            if datetime.now().hour >= 22 or datetime.now().hour < 7:
+                try:
+                    with open(os.path.join(STATE_DIR, "guest_mode_today"), "w") as f:
+                        f.write("1")
+                except OSError:
+                    pass
+                intent = dict(intent, purpose="guest_mode", comfort_target=27.5, power_request="hold")
         if not on_units:
-            # 判断是否需要开机            # 判断是否需要开机
+            _continuous_minutes(r, "unloaded", False, now_ts)
             _e_save = _energy_save_from_intent(
                 intent, _energy_save_for(r, act, c, activity, cond))
-            need_on = not _e_save and _automatic_cooling_allowed(c)
+            need_on = (not _e_save and has_occupants(r, act, activity)
+                       and _automatic_cooling_allowed(c)
+                       and intent.get("power_request", "on") == "on"
+                       and finite_number(rt) is not None
+                       and env.get(r, {}).get("comfort") != "适宜")
+            # AT 已达控制目标时，裸温偏热标签本身不能触发开机。
+            target = finite_number(intent.get("comfort_target"))
+            if target is None:
+                target = 28.5 if act == "sleeping" and 3 <= datetime.now().hour < 10 else 27.5
+            if finite_number(room_at) is not None and room_at <= target:
+                need_on = False
+            demand_min = _continuous_minutes(r, "demand", need_on, now_ts)
+            control_status[r] = {"demand_minutes": round(demand_min, 1)}
             if need_on and r in fresh_holding:
                 decisions[r] = "新风优先观察→空调保持关"
                 room_modes[r] = "新风"
@@ -638,7 +690,7 @@ def run() -> dict:
                     # 客餐厅夜间快速待机
                     _is_night2 = (hour_now >= 22 or hour_now < 6)
                     if r in ("lr", "dr") and _is_night2 and act in ("empty", "unknown"):
-                        if not any(get_state(lid) == "on" for lid in [
+                        if all(get_state(lid) == "off" for lid in [
                             "light.mijia_cn_group_1692857580902813696_group3_s_2_light",
                             "light.mijia_cn_group_1682436447321858048_group3_s_2_light",
                             "light.mijia_cn_group_1692854453868838912_group3_s_2_light",
@@ -651,56 +703,61 @@ def run() -> dict:
                     except: pass
             if need_on:
                 # 距离上次关机 < 30 分钟 → 不开机（防频繁开关 + 尊重手动关）
-                _just_off = False
+                _just_off = True
                 try:
                     _lc = devs.get(dev_ids[0], {}).get("last_changed", "")
                     if _lc:
                         _lc_ts = datetime.fromisoformat(_lc).timestamp()
                         _just_off = (int(time.time()) - _lc_ts) < 30 * 60
                 except Exception:
-                    _just_off = False
+                    _just_off = True
                 if _just_off:
                     decisions[r] = "关机未满30分钟→不控"
                     room_modes[r] = "待机"
                     continue
-                # 开机：以 comfort 温度 + cool 模式启动
+                if demand_min < max(1, cfg["auto_start_confirm_min"]):
+                    decisions[r] = f"需求确认中({demand_min:.0f}分钟)→保持关机"
+                    room_modes[r] = "待机"
+                    continue
+                # 开机只提交一次，等下一轮实时确认后再开始运行中调节。
                 on_unit = dev_ids[0]
-                _act(on_unit, "on", temp=28, mode="cool")
-                on_units = [on_unit]
-                decisions[r] = "开机置舒适"
-                # 补充 ref 缺失字段防止后续 try/except 跳过
-                if not devs.get(on_unit, {}).get("ac_set_temp"):
-                    devs[on_unit] = dict(devs.get(on_unit, {}), ac_set_temp="28", ac_cur_temp="28", climate_state="cool")
+                ac_return = finite_number(devs[on_unit].get("ac_cur_temp"))
+                start_sp = round(target + ac_return - (room_at if room_at is not None else rt)) if ac_return is not None else 28
+                start_sp = max(cfg["setpoint_min"], min(cfg["setpoint_max"], start_sp))
+                _act(on_unit, "on", temp=start_sp, mode="cool", fan=_fan_for(act, c, "cool"))
+                decisions[r] = "持续不适→请求开机待确认"
+                room_modes[r] = "舒适"
+                continue
             else:
+                if not _e_save:
+                    try:
+                        os.remove(os.path.join(STATE_DIR, f"engine_{r}_eco_since"))
+                    except OSError:
+                        pass
                 decisions[r] = "待机→已关机" if _is_standby else "空调关→不控"
                 room_modes[r] = "待机" if _is_standby else ("节能" if _e_save else "舒适")
                 continue
 
+        _continuous_minutes(r, "demand", False, now_ts)
+
         ref = devs[on_units[0]]              # 参考机(第一台在开的)
         cur_mode = ref.get("climate_state", "")
-        if cur_mode == "heat":
-            decisions[r] = "制热为手动模式→不控"
-            room_modes[r] = "手动"
-            continue
-
         energy_save = _energy_save_from_intent(
             intent, _energy_save_for(r, act, c, activity, cond))
 
         # ═══ 目标设定点计算（先算，模式+温度一轮下发）═══
         try:
-            ref_sp = int(float(ref.get("ac_set_temp", "")))
-        except (ValueError, TypeError):
+            ref_sp = int(finite_number(ref.get("ac_set_temp")))
+        except (ValueError, TypeError, OverflowError):
+            _continuous_minutes(r, "unloaded", False, now_ts)
             decisions[r] = "无设定点"
             continue
-        try:
-            ac_cur = float(ref.get("ac_cur_temp", ""))
-        except (ValueError, TypeError):
-            ac_cur = None
+        ac_cur = finite_number(ref.get("ac_cur_temp"))
 
         # 舒适目标优先来自意图层；缺失时保留安全兜底。
         intent_target = intent.get("comfort_target") if isinstance(intent, dict) else None
-        if isinstance(intent_target, (int, float)) and not isinstance(intent_target, bool):
-            at_comfort = intent_target
+        if finite_number(intent_target) is not None:
+            at_comfort = finite_number(intent_target)
         elif act == "sleeping" and not energy_save:
             _sleep_hour = datetime.now().hour
             at_comfort = 28.5 if 3 <= _sleep_hour < 10 else 27.5
@@ -709,9 +766,20 @@ def run() -> dict:
         else:
             at_comfort = 27.5
         # 节能模式以裸温为基准，正常模式以体感为基准
-        sense_temp = rt if energy_save else room_at
+        sense_temp = finite_number(rt if energy_save else room_at)
+        cold = any(state in c for state in ("偏冷", "过冷"))
+        if not energy_save and (cold or "舒适" in c) and sense_temp is not None:
+            sense_temp = min(sense_temp, at_comfort)
         comfort = max(20, at_comfort)  # 下限20°C
         now_ts = int(time.time())
+        comfortable_now = (finite_number(room_at) is not None and room_at <= at_comfort
+                           and ("舒适" in c or "偏冷" in c or "过冷" in c
+                                or env.get(r, {}).get("comfort") == "适宜"))
+        unload_minutes = _continuous_minutes(
+            r, "unloaded", comfortable_now and all(_is_unloaded(devs[d]) for d in on_units), now_ts,
+            session=[devs[d].get("last_changed") for d in on_units])
+        control_status[r] = {"unloaded_minutes": round(unload_minutes, 1),
+                             "unloaded_off_min": cfg["unloaded_off_min"]}
 
         # 节能待机：动态延迟（基于历史习惯，无数据时默认30分钟）
         hour_now = datetime.now().hour
@@ -726,78 +794,25 @@ def run() -> dict:
                 "light.mijia_cn_group_1682436447321858048_group3_s_2_light",  # 餐厅全灯
                 "light.mijia_cn_group_1692854453868838912_group3_s_2_light",  # 客厅日常灯组
             ]
-            _any_light_on = any(get_state(lid) == "on" for lid in _lr_lights)
-            if not _any_light_on:
+            _all_lights_off = all(get_state(lid) == "off" for lid in _lr_lights)
+            if _all_lights_off:
                 default_min = 5
-        # 预冷超时收尾：预冷启动后 45 分钟仍无人 → 待机关机
-        _pc_file = os.path.join(STATE_DIR, f"engine_{r}_precool_start")
-        _pc_active = os.path.isfile(_pc_file)
-        if _pc_active and act in ("empty", "unknown"):
-            try:
-                _pc_ts = int(open(_pc_file).read().strip())
-                _pc_elapsed = (now_ts - _pc_ts) // 60
-                _pc_sched = _load_json("precool_schedule.json").get("schedule", {}).get(r, [])
-                _pc_timeout = 45
-                for _entry in _pc_sched:
-                    if _entry.get("idle_timeout_min"):
-                        _pc_timeout = _entry["idle_timeout_min"]
-                        break
-                if _pc_elapsed >= _pc_timeout:
-                    standby = True
-                    decisions[r] = f"预冷{_pc_elapsed}分钟未归→收尾待机"
-                    try: os.remove(_pc_file)
-                    except OSError: pass
-            except: pass
-        if not _pc_active:
-            # 清除旧预冷标记
-            pass
-        # 有人回家：清理预冷标记，防止幽灵超时
-        if _pc_active and act not in ("empty", "unknown"):
-            try: os.remove(_pc_file)
-            except OSError: pass
         if energy_save:
-            if not os.path.isfile(standby_file):
+            try:
+                with open(standby_file) as f:
+                    since = int(f.read().strip())
+                if not 0 <= since <= now_ts:
+                    raise ValueError("invalid standby time")
+                standby = now_ts - since >= max(1, default_min) * 60
+            except (OSError, ValueError):
                 with open(standby_file, "w") as f: f.write(str(now_ts))
-            elif (now_ts - int(open(standby_file).read().strip())) >= default_min * 60:
-                standby = True
         else:
             try: os.remove(standby_file)
             except OSError: pass
 
-        # 预冷：待机中命中规律窗口 → 退出待机
-        if r == "br":
-            try:
-                with open("/tmp/br_standby.log", "w") as f:
-                    f.write(f"standby={standby} energy_save={energy_save} act={act} on_units={on_units} conf={comfort:.1f}")
-            except: pass
-        if standby:
-            try:
-                with open(os.path.join(STATE_DIR, "precool_schedule.json")) as f:
-                    sched = json.load(f)
-                    precool = sched.get("schedule", {}).get(r, [])
-                    wd_today = sched.get("wd_today", datetime.now().weekday() < 5)
-                hour = datetime.now().hour
-                minute = datetime.now().minute
-                wd = wd_today
-                for entry in precool:
-                    if entry.get("is_workday") == wd and entry["hour"] == hour:
-                        sm = entry.get("start_min", 0)
-                        if sm <= minute < sm + 60:
-                            standby = False
-                            # AC 被待机关掉了 → 预冷需重开
-                            if not on_units:
-                                on_unit = dev_ids[0]
-                                _act(on_unit, "on", temp=round(comfort), mode="cool")
-                                on_units = [on_unit]
-                            # 记录预冷开始时间（收尾计时用）
-                            _pc_file = os.path.join(STATE_DIR, f"engine_{r}_precool_start")
-                            with open(_pc_file, "w") as f: f.write(str(now_ts))
-                            # 重置 eco_since 防止立刻再次待机
-                            with open(standby_file, "w") as f: f.write(str(now_ts))
-                            break
-            except (IOError, json.JSONDecodeError):
-                pass
-        ts_f = os.path.join(STATE_DIR, f"engine_{r}_sp_ts")
+        # 历史预冷时间表不再覆盖停机决定；空房不能因习惯预测继续制冷。
+        unloaded_standby = unload_minutes >= max(1, cfg["unloaded_off_min"])
+        standby = standby or unloaded_standby
 
         # 开机检测：AC 最近 2 分钟内才 on 才算刚开机（用 last_changed）
         fresh_on = False
@@ -814,27 +829,16 @@ def run() -> dict:
 
         is_cool = zone_mode in ("cool", "dry")
 
-        if r == "br":
-            try:
-                with open("/tmp/br_standby.log", "w") as f:
-                    f.write(f"standby={standby} energy_save={energy_save} act={act} on_units={on_units} conf={comfort:.1f}")
-            except: pass
         if standby:
-            for d in on_units:
-                _act(d, "off")
             new_sp = ref_sp
-            reason = "待机→关机"
+            reason = (f"舒适且连续卸载{unload_minutes:.0f}分钟→请求关机"
+                      if unloaded_standby else "节能待机→请求关机")
         else:
             new_sp, reason = _compute_setpoint(
                 comfort, at_comfort, energy_save, is_cool,
                 ac_cur, sense_temp, ref_sp, fresh_on,
                 cfg["setpoint_min"], cfg["setpoint_max"])
         # ═══ 同步下发（模式+温度合并一轮）═══
-        if r in ("lr", "dr"):
-            try:
-                with open(f"/tmp/dbg_{r}_compute.log", "a") as f:
-                    f.write(f"{datetime.now().strftime('%H:%M:%S')} comfort={comfort:.1f} at_c={at_comfort:.1f} sense={sense_temp} ac={ac_cur} ref={ref_sp} → new={new_sp} [{reason}]\n")
-            except: pass
         _dispatch_ac(r, on_units, devs, new_sp, zone_mode, reason,
                      standby, energy_save, act, c, comfort, now_ts,
                      decisions, room_modes)
@@ -895,6 +899,7 @@ def run() -> dict:
             "activity": activity(r), "cond": cond(r),
             "readings": readings(r),
             "intent": intents.get(r, {}),
+            "control": control_status.get(r, {}),
             "decision": decisions.get(r, "无"),
         } for r in rooms},
         "dehum": {"state": dehum_state, "mode_cur": dehum_mode_cur, "mode_target": dehum_mode,

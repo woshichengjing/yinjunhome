@@ -232,7 +232,7 @@ class ClimateDecisionTests(unittest.TestCase):
 
             # 新风持续未确认启动时，不重置首次尝试时间；超过宽限期由 AC 兜底。
             act.reset_mock()
-            clock.return_value = now + climate_engine.FRESH_START_GRACE_SECONDS + 1
+            clock.return_value = now + config["auto_start_confirm_min"] * 60
             climate_engine.run()
 
         act.assert_any_call(climate_engine.FRESH_DEV, "on")

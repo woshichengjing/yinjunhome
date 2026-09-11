@@ -4,6 +4,7 @@
 """
 import json, os, time
 from datetime import datetime
+from state_machines.climate_policy import cooling_allowed, has_runaway, guest_active
 
 STATE_DIR = "/tmp/hermes_states"
 CONFIG_FILE = os.path.expanduser("~/.hermes/scripts/data/climate_config.json")
@@ -44,9 +45,7 @@ def _is_fresh(payload: dict, max_age: int = INPUT_MAX_AGE_SECONDS) -> bool:
 
 def _automatic_power_request(conditions: list) -> str:
     """与执行层一致：冷状态、舒适、偏湿或仅空气问题都不请求自动开机。"""
-    if "偏冷" in conditions or "过冷" in conditions:
-        return "hold"
-    return "on" if any(state in conditions for state in ("偏热", "过热", "过湿")) else "hold"
+    return "on" if cooling_allowed(conditions) else "hold"
 
 
 def run() -> dict:
@@ -128,17 +127,26 @@ def run() -> dict:
             }
             continue
 
+        # 跑温是全局否决，必须先于睡眠、待客和共享空间舒适策略。
+        if has_runaway(room, conditions, lambda r: env.get(r, {}).get("condition", [])):
+            intents[room] = {
+                "occupancy": activity, "purpose": "energy", "comfort_target": 30,
+                "hvac_preference": "off", "power_request": "hold", "priority": 2,
+                "reason": "occupied_runaway" if activity == "occupied" else "runaway",
+                "source": ["env_quality"],
+            }
+            continue
+
         # ── P2: 房间保护 ──
         # Guest mode (night-time lr/dr manual on)
-        if room in ("lr", "dr"):
-            guest_file = os.path.join(STATE_DIR, "guest_mode_today")
-            if os.path.isfile(guest_file) and (hour >= 22 or hour < 7):
+        if room in ("lr", "dr") and activity in ("empty", "unknown"):
+            if guest_active(STATE_DIR, datetime.now()):
                 intents[room] = {
                     "occupancy": "occupied",
                     "purpose": "guest_mode",
                     "comfort_target": 27.5,
                     "hvac_preference": "cool",
-                    "power_request": "on",
+                    "power_request": "hold",
                     "priority": 2,
                     "reason": "guest_mode",
                     "source": ["climate_engine"],
@@ -170,21 +178,6 @@ def run() -> dict:
 
         if is_occupied:
             # ── P4: 温控策略 ──
-            # Check for runaway (window open)
-            has_runaway = any("跑温" in c for c in conditions)
-            if has_runaway:
-                intents[room] = {
-                    "occupancy": activity,
-                    "purpose": "energy",
-                    "comfort_target": 30,
-                    "hvac_preference": "cool",
-                    "power_request": "hold",
-                    "priority": 4,
-                    "reason": "occupied_runaway",
-                    "source": ["env_quality"],
-                }
-                continue
-
             # Normal occupied → comfort
             intents[room] = {
                 "occupancy": activity,
@@ -234,10 +227,10 @@ def run() -> dict:
         # Fallback
         intents[room] = {
             "occupancy": activity,
-            "purpose": "comfort",
-            "comfort_target": 27.5,
+            "purpose": "energy",
+            "comfort_target": 30,
             "hvac_preference": "cool",
-            "power_request": _automatic_power_request(conditions),
+            "power_request": "hold",
             "priority": 5,
             "reason": "fallback",
             "source": ["room_state"],

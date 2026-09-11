@@ -83,6 +83,7 @@ def ha_post(service: str, data: dict) -> bool:
 # ══════════════════════════════════════════════
 
 ACTION_MAX_AGE_SECONDS = 30 * 60
+ENGINE_ACTION_MAX_AGE_SECONDS = 180
 
 def submit_action(dev_id: str, action: str, temp: int = None, mode: str = None, fan: str = None,
                   force: bool = False, source: str = "manual"):
@@ -94,6 +95,9 @@ def submit_action(dev_id: str, action: str, temp: int = None, mode: str = None, 
     force:  强制重发硬上电(无视proxy的on、绕过保护窗)，用于代理失真恢复
     """
     action_file = os.path.join(STATE_DIR, f"{dev_id}_action.json")
+    pending = _load_action(dev_id) if source == "engine" else None
+    if pending and pending.get("source") != "engine":
+        return  # 用户排队指令优先，不被每分钟的自动决策覆盖。
     data = {
         "action": action,
         "temp": temp,
@@ -128,7 +132,8 @@ def _load_action(dev_id: str) -> dict | None:
             raise ValueError("unsupported action")
         created = int(action.get("ts", 0))
         age = int(time.time()) - created
-        if created <= 0 or age < -300 or age > ACTION_MAX_AGE_SECONDS:
+        max_age = ENGINE_ACTION_MAX_AGE_SECONDS if action.get("source") == "engine" else ACTION_MAX_AGE_SECONDS
+        if created <= 0 or age < 0 or age > max_age:
             _clear_action(dev_id)
             print(f"[queue] expired action discarded: {dev_id}", flush=True)
             return None
@@ -146,6 +151,13 @@ def _clear_action(dev_id: str):
         os.remove(action_file)
     except OSError:
         pass
+
+
+def cancel_engine_action(dev_id: str):
+    """新一轮重判前撤销旧自动指令，尤其是保护窗里等待的开机/关机。"""
+    pending = _load_action(dev_id)
+    if pending and pending.get("source") == "engine":
+        _clear_action(dev_id)
 
 
 def _action_desc(action: dict) -> str:
@@ -218,6 +230,29 @@ def _execute_action(dev_id: str, dev: dict, action: dict, protect: bool = True) 
     protect=True 才打保护戳(开关机/换模式)；纯调温/风速 protect=False 不占保护窗。"""
     act = action["action"]
     climate = dev["climate"]
+
+    if action.get("source") == "engine":
+        # 决策与执行之间用户可能刚关机或切到手动模式；set 不得唤醒已关设备。
+        live = _ha_req("GET", f"/api/states/{climate}") or {}
+        state = live.get("state")
+        permitted = state in ("off", "cool", "dry")
+        if act == "set" and state == "off":
+            permitted = False
+        if act == "on" and state == "off":
+            try:
+                permitted = permitted and time.time() - datetime.fromisoformat(live["last_changed"]).timestamp() >= 1800
+            except (KeyError, TypeError, ValueError):
+                permitted = False
+        # 仅禁用允许关掉手动模式；防止排队期间用户切换到制热后仍执行旧 off。
+        if act == "off" and state not in (None, "", "unknown", "unavailable", "off", "cool", "dry"):
+            try:
+                with open(os.path.join(STATE_DIR, "ac_disabled.json")) as f:
+                    permitted = bool(json.load(f).get(dev_id.split("_")[0], False))
+            except (OSError, ValueError, AttributeError):
+                permitted = False
+        if not permitted:
+            _clear_action(dev_id)
+            return False
 
     if DRY_RUN:
         print(f"[DRY_RUN] {dev_id}: {_action_desc(action)} → 跳过执行")
@@ -494,12 +529,17 @@ def evaluate_device(dev_id: str, dev: dict) -> dict:
         result["compressor_load"] = "已停止"
     else:
         try:
-            if ac_cur and ac_set and ac_cur not in ("unknown", "unavailable"):
+            if attrs.get("hvac_action") == "idle":
+                result["compressor_load"] = "已卸载"
+            elif attrs.get("hvac_action") in ("cooling", "drying", "heating"):
+                result["compressor_load"] = "带载中"
+            elif climate_state in ("cool", "dry") and not attrs.get("hvac_action") and ac_cur and ac_set and ac_cur not in ("unknown", "unavailable"):
                 result["compressor_load"] = "带载中" if float(ac_cur) > float(ac_set) else "已卸载"
             else:
                 result["compressor_load"] = "未知"
         except (ValueError, TypeError):
             result["compressor_load"] = "未知"
+    result["compressor_load_source"] = "hvac_action" if attrs.get("hvac_action") else "return_temperature_estimate"
 
     # 统一保护：距上次指令执行 < protection_min(默认15)min 则保护中，执行即重置
     blocked, remaining, ends_at = _protection(dev_id)
