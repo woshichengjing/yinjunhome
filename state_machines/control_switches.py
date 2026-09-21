@@ -3,6 +3,8 @@ import json
 import os
 import time
 
+SHARED_STATE_DIR = "/root/.hermes/static/data"
+
 
 def _flag(state_dir, filename, key):
     try:
@@ -17,8 +19,8 @@ def _flag(state_dir, filename, key):
 
 
 def read_control_switches(state_dir, device):
-    room_disabled = _flag(state_dir, "ac_disabled.json", device[:-3]) if device.endswith("_ac") else False
-    soft_off = _flag(state_dir, "device_soft_off.json", device)
+    room_disabled = _flag(SHARED_STATE_DIR, "ac_disabled.json", device[:-3]) if device.endswith("_ac") else False
+    soft_off = _flag(SHARED_STATE_DIR, "device_soft_off.json", device)
     reason = ("room_disabled" if room_disabled is True else
               "device_soft_off" if soft_off is True else
               "switch_state_unknown" if room_disabled is None or soft_off is None else "")

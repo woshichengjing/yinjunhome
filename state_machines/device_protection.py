@@ -258,7 +258,7 @@ def _execute_action(dev_id: str, dev: dict, action: dict, protect: bool = True) 
         # 仅禁用允许关掉手动模式；防止排队期间用户切换到制热后仍执行旧 off。
         if act == "off" and state not in (None, "", "unknown", "unavailable", "off", "cool", "dry"):
             try:
-                with open(os.path.join(STATE_DIR, "ac_disabled.json")) as f:
+                with open(os.path.join("/root/.hermes/static/data", "ac_disabled.json")) as f:
                     permitted = bool(json.load(f).get(dev_id.split("_")[0], False))
             except (OSError, ValueError, AttributeError):
                 permitted = False

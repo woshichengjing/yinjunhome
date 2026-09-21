@@ -68,6 +68,15 @@ def _load_json(name: str) -> dict:
     except Exception:
         return {}
 
+
+def _load_shared_json(name: str) -> dict:
+    try:
+        with open(os.path.join("/root/.hermes/static/data", name)) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
 def _cfg() -> dict:
     try:
         with open(CONFIG_FILE) as f:
@@ -455,7 +464,7 @@ def run() -> dict:
         external_age = 10**9
     ext = ext_data if 0 <= external_age <= 180 else {}
     devp = _load_json("device_protection.json").get("devices", {})
-    soft_off = _load_json("device_soft_off.json") if os.path.isfile(os.path.join(STATE_DIR, "device_soft_off.json")) else {}
+    soft_off = _load_shared_json("device_soft_off.json")
 
     out = ext.get("current", {})
     out_temp = out.get("temp")
@@ -493,7 +502,7 @@ def run() -> dict:
     fresh_holding = set()
     fresh_target = None
     fresh_desc = "无"
-    soft_off = _load_json("device_soft_off.json") if os.path.isfile(os.path.join(STATE_DIR, "device_soft_off.json")) else {}
+    soft_off = _load_shared_json("device_soft_off.json")
     if soft_off.get(FRESH_DEV, False):
         if fresh_state == "on":
             _act(FRESH_DEV, "off")
@@ -569,7 +578,7 @@ def run() -> dict:
     control_status = {}
     for r in rooms:
         # 每轮重新加载软关状态（面板可能刚操作）
-        soft_off = _load_json("device_soft_off.json") if os.path.isfile(os.path.join(STATE_DIR, "device_soft_off.json")) else {}
+        soft_off = _load_shared_json("device_soft_off.json")
         dev_ids = AC[r]
         devs = {dev_id: devp.get(dev_id, {}) for dev_id in dev_ids}
         live_devices_known = _refresh_ac_states(dev_ids, devs)
@@ -879,7 +888,7 @@ def run() -> dict:
     dehum_mode_cur = get_attr(DEHUM_ENTITY, "mode")
     # 设备软关
     # 除湿禁用
-    soft_off = _load_json("device_soft_off.json") if os.path.isfile(os.path.join(STATE_DIR, "device_soft_off.json")) else {}
+    soft_off = _load_shared_json("device_soft_off.json")
     if not inputs_fresh:
         dehum_desc = "输入数据过期→不控"
         dehum_mode = "未知"
