@@ -30,7 +30,7 @@ if not HASS_TOKEN:
 
 sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
 from state_machines.device_protection import submit_action, cancel_engine_action, DEVICES
-from state_machines.climate_policy import cooling_allowed, has_runaway, has_occupants, finite_number
+from state_machines.climate_policy import cooling_allowed, has_runaway, has_occupants, finite_number, adaptive_at_comfort
 from state_machines.control_switches import read_control_switches
 
 # ── 设备映射 ──（客餐厅已解耦，每台独立控制）
@@ -788,7 +788,7 @@ def run() -> dict:
         elif energy_save:
             at_comfort = cfg.get("energy_temp", 30)
         else:
-            at_comfort = 27.5
+            at_comfort = adaptive_at_comfort(out_temp)
         # 节能模式以裸温为基准，正常模式以体感为基准
         sense_temp = finite_number(rt if energy_save else room_at)
         cold = any(state in c for state in ("偏冷", "过冷"))

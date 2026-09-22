@@ -4,7 +4,7 @@
 """
 import json, os, time
 from datetime import datetime
-from state_machines.climate_policy import cooling_allowed, has_runaway, guest_active
+from state_machines.climate_policy import cooling_allowed, has_runaway, guest_active, adaptive_at_comfort
 from state_machines.control_switches import read_control_switches
 
 STATE_DIR = "/tmp/hermes_states"
@@ -61,6 +61,8 @@ def run() -> dict:
     if not _is_fresh(env_data):
         stale_inputs.append("env_quality")
     suite_bath = _load_engine_config().get("suite_bath", {})
+    ext_data = _load("external_env.json")
+    out_temp = ext_data.get("current", {}).get("temp") if isinstance(ext_data, dict) else None
 
     hour = datetime.now().hour
     intents = {}
@@ -187,7 +189,7 @@ def run() -> dict:
             intents[room] = {
                 "occupancy": activity,
                 "purpose": "comfort",
-                "comfort_target": 27.5,
+                "comfort_target": adaptive_at_comfort(out_temp),
                 "hvac_preference": "cool",
                 "power_request": _automatic_power_request(conditions),
                 "priority": 4,
@@ -209,7 +211,7 @@ def run() -> dict:
                     intents[room] = {
                         "occupancy": activity,
                         "purpose": "comfort",
-                        "comfort_target": 27.5,
+                        "comfort_target": adaptive_at_comfort(out_temp),
                         "hvac_preference": "cool",
                         "power_request": _automatic_power_request(conditions),
                         "priority": 4,

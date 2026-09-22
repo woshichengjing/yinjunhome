@@ -47,3 +47,14 @@ def guest_active(state_dir, now):
         return start.timestamp() <= modified <= now.timestamp()
     except OSError:
         return False
+
+def adaptive_at_comfort(out_temp):
+    """室外温度 → 正常有人时的体感舒适目标（0.5°C 精度，匹配空调步进）。
+    室外越凉目标越高（少制冷）：室外 28°C → 27.5，室外 20°C → 29.0，线性过渡。"""
+    t = finite_number(out_temp)
+    if t is None:
+        return 27.5
+    target = 27.5 + (28.0 - t) * 0.1875
+    target = max(27.5, min(29.0, target))
+    return round(target * 2) / 2
+
