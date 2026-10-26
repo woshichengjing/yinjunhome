@@ -37,15 +37,21 @@ from state_machines.control_switches import read_control_switches
 AC = {"br": ["br_ac"], "st": ["st_ac"], "lr": ["lr_ac"], "dr": ["dr_ac"], "nb": ["nb_ac"], "sb": ["sb_ac"]}
 DEHUM_DEV = "br_dehum"
 FRESH_DEV = "fresh_air"
+FRESH_MODE_DEV = "fresh_air_mode"
+FRESH_SPEED_DEV = "fresh_air_speed"
 DEHUM_ENTITY = "humidifier.aden_cn_965757218_derh40"
-FRESH_SWITCH = "switch.giot_cn_2002953222_v82ksm_channel_4_p_3_1"
+FRESH_SWITCH = "switch.giot_cn_1126363409_v8icm_on_p_2_1"
+FRESH_MODE_SWITCH = "switch.zhu_wei_xin_feng_pei_zhi_kai_guan_switch_2"
+FRESH_SPEED_SWITCH = "switch.zhu_wei_xin_feng_pei_zhi_kai_guan_switch_1"
 
 DEFAULTS = {
     "dry_run": False, "rooms": [],
     "setpoint_min": 16, "setpoint_max": 32, "step": 1,
     "energy_temp": 30, "energy_hysteresis": 0.5,
     "fresh_observe_min": 30, "dehum_temp_ceiling": 29,
-    "co2_high": 1000, "co2_high_humid": 1200,
+    "co2_high": 1000, "co2_high_humid": 1200, "co2_severe": 1800,
+    "fresh_mode_temp_min": 20, "fresh_mode_temp_max": 26,
+    "fresh_night_start": 22, "fresh_night_end": 7,
     "fresh_cool_delta": 2.0, "dry_tcool_buffer": 1.0, "dry_hysteresis": 0.5,
     "suite_bath": {},
     "unloaded_off_min": 30, "auto_start_confirm_min": 3,
@@ -491,21 +497,32 @@ def run() -> dict:
 
     # ═══ 新风（全屋，按 br/st 需求）═══
     fresh_state = get_state(FRESH_SWITCH)
+    fresh_mode_state = get_state(FRESH_MODE_SWITCH)
+    fresh_speed_state = get_state(FRESH_SPEED_SWITCH)
     fresh_attempt_f = os.path.join(STATE_DIR, "engine_fresh_attempt_since")
     cool_rooms = []
     dehum_need_rooms = []
     co2_high = False
+    co2_max = 0
+    co2_severe = False
     fresh_environment_ok = False
     fresh_cool_ok = False
     fresh_dehum_ok = False
     hold_eligible = set()
     fresh_holding = set()
     fresh_target = None
+    fresh_mode_target = None
+    fresh_speed_target = None
     fresh_desc = "无"
     soft_off = _load_shared_json("device_soft_off.json")
     if soft_off.get(FRESH_DEV, False):
         if fresh_state == "on":
             _act(FRESH_DEV, "off")
+        # 软关时辅助开关归位默认（节能热交换 + 强档）
+        if fresh_mode_state == "on":
+            _act(FRESH_MODE_DEV, "off")
+        if fresh_speed_state == "on":
+            _act(FRESH_SPEED_DEV, "off")
         fresh_desc = "软关跳过"
         for marker in (fresh_attempt_f,):
             try:
@@ -522,6 +539,11 @@ def run() -> dict:
         outdoor_humid = (out_ah is not None and indoor_ahs and out_ah >= min(indoor_ahs))
         co2_thresh = cfg["co2_high_humid"] if outdoor_humid else cfg["co2_high"]
         co2_high = any((readings(r).get("co2") or 0) > co2_thresh for r in rooms)
+        # 空气质量分级：取全屋 CO₂ 峰值判断是否严重超标（空气质量优先）
+        co2_vals = [finite_number(readings(r).get("co2")) for r in rooms]
+        co2_vals = [v for v in co2_vals if v is not None and v > 0]
+        co2_max = max(co2_vals) if co2_vals else 0
+        co2_severe = co2_max > cfg["co2_severe"]
         fresh_environment_ok = ext.get("fresh_eligible") is True
         fresh_cool_rooms = {r for r in cool_rooms if fresh_environment_ok
                             and finite_number(out_temp) is not None and finite_number(room_temp(r)) is not None
@@ -560,10 +582,39 @@ def run() -> dict:
             except OSError:
                 pass
 
+        # ── 模式决策：严重超标→普通通风(旁通,无视室外温度)；否则室外宜人→普通通风，室外极端→节能热交换 ──
+        if fresh_target == "on":
+            if co2_severe:
+                fresh_mode_target = "on"
+            else:
+                ot = finite_number(out_temp)
+                if ot is not None and cfg["fresh_mode_temp_min"] <= ot <= cfg["fresh_mode_temp_max"]:
+                    fresh_mode_target = "on"
+                else:
+                    fresh_mode_target = "off"
+        else:
+            fresh_mode_target = "off"
+
+        # ── 风速决策：严重超标→强档(无视夜间)；否则夜间弱档、白天强档 ──
+        if fresh_target == "on":
+            if co2_severe:
+                fresh_speed_target = "off"
+            else:
+                hour = datetime.now().hour
+                is_night = hour >= cfg["fresh_night_start"] or hour < cfg["fresh_night_end"]
+                fresh_speed_target = "on" if is_night else "off"
+        else:
+            fresh_speed_target = "off"
+
         if fresh_target == "on":
             fresh_desc = _act(FRESH_DEV, "on")
         elif fresh_target == "off":
             fresh_desc = _act(FRESH_DEV, "off")
+        # 模式/风速：状态变化才下发，避免每轮无效队列
+        if fresh_mode_target in ("on", "off") and fresh_mode_state != fresh_mode_target:
+            _act(FRESH_MODE_DEV, fresh_mode_target)
+        if fresh_speed_target in ("on", "off") and fresh_speed_state != fresh_speed_target:
+            _act(FRESH_SPEED_DEV, fresh_speed_target)
 
     # 每个房间独立计观察期；关闭、软关或数据失效立即重置。
     for room in rooms:
@@ -916,6 +967,9 @@ def run() -> dict:
         "inputs": {"fresh": inputs_fresh, "stale": stale_inputs},
         "outdoor": {"temp": out_temp, "ah": out_ah},
         "fresh": {"state": fresh_state, "target": fresh_target, "decision": fresh_desc,
+                  "mode_state": fresh_mode_state, "mode_target": fresh_mode_target,
+                  "speed_state": fresh_speed_state, "speed_target": fresh_speed_target,
+                  "co2_max": co2_max, "co2_severe": co2_severe,
                   "environment_ok": fresh_environment_ok, "cool_ok": fresh_cool_ok,
                   "dehum_ok": fresh_dehum_ok, "co2_high": co2_high,
                   "holding": sorted(fresh_holding)},

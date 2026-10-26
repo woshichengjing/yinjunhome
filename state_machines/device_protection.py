@@ -390,7 +390,9 @@ DEVICES = {
     "br_dehum":    {"type": "humidifier", "entity": "humidifier.aden_cn_965757218_derh40"},
     "laundry_dehum": {"type": "humidifier", "entity": "humidifier.xiaomi_cn_742311152_13l"},
     "gb_dehum":    {"type": "humidifier", "entity": "humidifier.aden_cn_747834793_derh16"},
-    "fresh_air":   {"type": "fresh", "switch": "switch.giot_cn_2002953222_v82ksm_channel_4_p_3_1"},
+    "fresh_air":        {"type": "fresh", "switch": "switch.giot_cn_1126363409_v8icm_on_p_2_1"},
+    "fresh_air_mode":   {"type": "fresh", "switch": "switch.zhu_wei_xin_feng_pei_zhi_kai_guan_switch_2"},
+    "fresh_air_speed":  {"type": "fresh", "switch": "switch.zhu_wei_xin_feng_pei_zhi_kai_guan_switch_1"},
     "kitchen_exhaust": {"type": "fresh", "switch": "switch.giot_cn_1126328471_v8icm_on_p_2_1"},
     "gb_exhaust":      {"type": "fresh", "switch": "climate.yeelink_cn_647044298_v6"},
 }
