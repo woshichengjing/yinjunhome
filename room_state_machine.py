@@ -33,6 +33,7 @@ SLEEP_END = 12
 CAT_NIGHT_START = 22
 CAT_NIGHT_END = 7
 CAT_NOISE_MAX = 45
+HOME_EMPTY_DELAY_MIN = 30  # 全屋无人确认时长（分钟）——手机 IP 在线信号回来后叠加
 STATE_CN = {"empty": "无人", "entering": "进入中", "occupied": "有人活动", "sleeping": "睡觉"}
 
 ROOMS = {
@@ -316,6 +317,46 @@ def main():
             "duration": int(float(dur)) if dur else 0,
             "reason": reason[:100] if reason else "",
         }
+
+    # ── 全屋有人判断（不依赖手机；手机 IP 在线回来后在此叠加 ping 信号）──
+    # 确认有人的状态；entering 是过渡/猫光影误触发，不算确认有人
+    _occupied_states = {"occupied", "sleeping", "watching_movie"}
+    _anyone = any(
+        room_states["rooms"].get(r, {}).get("activity") in _occupied_states
+        for r in ROOMS
+    )
+    _home_tick = os.path.join(STATE_DIR, "home_empty_since")
+    _now = int(time.time())
+    _cur_home = states.get("input_boolean.jia_li_you_ren", "off")
+    if _anyone:
+        try:
+            os.remove(_home_tick)
+        except OSError:
+            pass
+        _home_new = "on"
+    else:
+        if not os.path.isfile(_home_tick):
+            with open(_home_tick, "w") as f:
+                f.write(str(_now))
+            _home_new = _cur_home  # 刚进入无人候选，保持现状
+        else:
+            try:
+                _since = int(open(_home_tick).read().strip())
+            except Exception:
+                _since = _now
+            _home_new = "off" if (_now - _since) >= HOME_EMPTY_DELAY_MIN * 60 else _cur_home
+    room_states["home_occupied"] = _home_new
+    if _home_new != _cur_home:
+        try:
+            data = json.dumps({"state": _home_new}).encode()
+            req = urllib.request.Request(
+                f"{HA}/api/states/input_boolean.jia_li_you_ren",
+                data=data, method="POST",
+                headers={"Authorization": f"Bearer {HASS_TOKEN}", "Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=3)
+        except Exception as e:
+            print(f"  [push] home_occ: {e}", flush=True)
 
     try:
         os.makedirs(STATE_DIR, exist_ok=True)
