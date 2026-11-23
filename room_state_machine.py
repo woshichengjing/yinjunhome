@@ -2,6 +2,8 @@
 """Room state machine - 5s polling, batch read HA, local eval, batch write HA entity + room_state.json."""
 import json, os, time, urllib.request, sys
 
+from dashboard_lights import light_snapshot
+
 os.environ["TZ"] = "Asia/Shanghai"
 time.tzset()
 
@@ -346,6 +348,7 @@ def main():
                 _since = _now
             _home_new = "off" if (_now - _since) >= HOME_EMPTY_DELAY_MIN * 60 else _cur_home
     room_states["home_occupied"] = _home_new
+    room_states["lighting"] = light_snapshot(states, room_states["generated_at"])
     if _home_new != _cur_home:
         try:
             data = json.dumps({"state": _home_new}).encode()

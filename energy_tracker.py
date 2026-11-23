@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""energy_tracker.py — 每5分钟累计压缩机带载时长，输出能耗估算 + 30天历史快照"""
-import json, os, time
+"""energy_tracker.py — 按采样间隔累计运行时长，输出能耗估算和 30 天历史快照。"""
+import json, os, shutil, time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 STATE_DIR = "/tmp/hermes_states"
 DST = "/app/static/data"
@@ -9,10 +11,11 @@ EST_WATT = 1500
 DEHUM_WATT = 300
 AC_IDLE_WATT = 80    # 待机/风扇基础功耗
 MAX_DAYS = 30
+ZONE = ZoneInfo("Asia/Shanghai")
 
-def run():
+def run(dashboard_dir=DST):
     now_ts = int(time.time())
-    today = time.strftime("%Y-%m-%d")
+    today = datetime.fromtimestamp(now_ts, ZONE).date().isoformat()
     energy_file = os.path.join(STATE_DIR, "energy_stats.json")
 
     # ── 当日累计 ──
@@ -57,8 +60,8 @@ def run():
             if room_key not in stats["rooms"]:
                 stats["rooms"][room_key] = {"runtime_sec": 0, "est_kwh": 0}
             stats["rooms"][room_key]["runtime_sec"] += (elapsed if watt > 0 else 0)
-            stats["rooms"][room_key]["est_kwh"] += round(watt * elapsed / 3600000, 4)
-            stats["rooms"][room_key]["est_kwh"] = round(stats["rooms"][room_key]["est_kwh"], 2)
+            room_stats = stats["rooms"][room_key]
+            room_stats["est_kwh"] = round(room_stats["est_kwh"] + watt * elapsed / 3600000, 6)
 
         snapshot_devices[dev_id] = {"watts": watt, "runtime_sec": elapsed if watt > 0 else 0}
         total_watts += watt
@@ -67,11 +70,6 @@ def run():
     os.makedirs(os.path.dirname(energy_file), exist_ok=True)
     with open(energy_file, "w") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
-    import shutil
-    dst_file = os.path.join(DST, "state_energy_stats.json")
-    shutil.copy2(energy_file, dst_file)
-    os.chmod(dst_file, 0o644)
-
     # ── 历史快照 ──
     history = []
     try:
@@ -87,14 +85,16 @@ def run():
     cutoff = now_ts - MAX_DAYS * 86400
     history = [p for p in history if p["ts"] >= cutoff]
 
-    # 每天最多 288 条，30 天 ≈ 8640 条 → 保持合理大小
+    # 仅保留最近 30 天的采样点。
     with open(HIST_FILE, "w") as f:
         json.dump(history, f, ensure_ascii=False, separators=(",", ":"))
 
-    # 同步历史到静态目录
-    dst_hist = os.path.join(DST, "state_energy_history.json")
-    shutil.copy2(HIST_FILE, dst_hist)
-    os.chmod(dst_hist, 0o644)
+    # 独立运行时兼容旧的直出路径，控制器通过持久化目录发布。
+    if dashboard_dir is not None:
+        for src, name in ((energy_file, "state_energy_stats.json"), (HIST_FILE, "state_energy_history.json")):
+            dst = os.path.join(dashboard_dir, name)
+            shutil.copy2(src, dst)
+            os.chmod(dst, 0o644)
 
     print(f"energy: today={stats['rooms']}, history={len(history)} snapshots")
 

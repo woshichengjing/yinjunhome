@@ -111,7 +111,10 @@ def main():
     try:
         with open(os.path.join(STATE_DIR, "room_state.json")) as f:
             room_data = json.load(f)
+        lighting = room_data.pop("lighting", None)
         write_json("state_room_state.json", room_data)
+        if lighting:
+            write_json("state_lights.json", lighting)
     except Exception as e:
         errors.append(f"room_state: {e}")
 
@@ -179,7 +182,9 @@ def main():
     # ── 7. 能耗 ──
     try:
         from energy_tracker import run as energy_run
-        energy_run()
+        energy_run(dashboard_dir=None)
+        sync_file("energy_stats.json", "state_energy_stats.json")
+        sync_file("energy_history.json", "state_energy_history.json")
     except Exception as e:
         errors.append(f"energy_tracker: {e}")
 

@@ -148,6 +148,8 @@ h1{font-size:22px;color:#58a6ff;margin-bottom:4px}
 .env-swipe-hint{font-size:10px;color:#484f58;text-align:right;margin-top:4px}
 .windy-click-layer{position:absolute;top:0;left:0;width:100%;height:50vh;z-index:5;cursor:pointer;pointer-events:auto}
 .weather-active .windy-click-layer{display:none}
+#status{grid-column:1/-1;justify-self:end;padding:4px 8px;border-radius:6px;background:#161b22;color:#c9d1d9;font-size:12px}
+#status[data-state="warning"]{color:#f0c46a}
 </style>
 <link rel="stylesheet" href="/static/weather-forecast.css?v=20260906">
 <link rel="stylesheet" href="/static/wall-theme.css?v=20260906-10">
@@ -176,10 +178,10 @@ h1{font-size:22px;color:#58a6ff;margin-bottom:4px}
 
 <div class="container">
 <aside id="weather-forecast" class="forecast-panel" aria-label="杭州天气预报"></aside>
-<span id="status" style="display:none">⚠️ Load failed</span>
 <div class="container-grid">
 <div class="windy-readings" id="weather-panel"></div>
 <div class="grid4">
+<div id="status" role="status">正在加载房间数据…</div>
 <div id="room-devices" style="grid-column:1/-1"></div>
 <div id="whole-home-analysis" style="grid-column:1/-1;text-align:center;margin-top:8px"><span style="cursor:pointer;font-size:12px;color:#8b949e;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:4px 12px;display:inline-block" onclick="showUnifiedData('energy')"><svg class="emo" viewBox="0 0 24 24" style="width:11px;height:11px;vertical-align:middle;margin-right:3px"><rect x="3" y="13" width="4" height="8" rx="1" fill="#8b949e"/><rect x="10" y="8" width="4" height="13" rx="1" fill="#8b949e"/><rect x="17" y="5" width="4" height="16" rx="1" fill="#8b949e" opacity=".5"/></svg>全屋数据分析</span></div>
 </div>
@@ -446,17 +448,18 @@ setInterval(function(){
   if(window.ControlSwitches&&document.querySelector('.dev-soft-btn,.ac-ctrl-toggle'))ControlSwitches.refresh().catch(function(){});
 },1000);
 
-var HA_TOKEN='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI0ZTU1OTc3MGQ2MDA0ZTJiOGMwZGI5OTA3MGE2NTlkYiIsImlhdCI6MTcyMTAxNjI1NywiZXhwIjoyMDM2Mzc2MjU3fQ.NPtjYj1oL3jqC1iNI5YaHJKdFIAXKYhg6Y3DEsGlKF0';
-function toggleLight(eid){
+function toggleLight(room,eid){
+  var lights=DATA.lights?.lights?.[room];
+  if(!lights?.some(function(light){return light.id===eid&&(light.state==='on'||light.state==='off');}))return;
   fetch('/api/toggle/light/'+encodeURIComponent(eid)+'/toggle',{method:'POST'});
 }
-function toggleRoomLights(rk,on){console.log("toggleRoomLights",rk,on);
+function toggleRoomLights(rk,on){
   var ldata=DATA.lights?DATA.lights.lights:null;
   if(!ldata||!ldata[rk])return;
   var service=on?'turn_on':'turn_off';
   for(var li=0;li<ldata[rk].length;li++){
     var l=ldata[rk][li];
-    if((on&&l.state!=='on')||(!on&&l.state==='on')){
+    if((on&&l.state==='off')||(!on&&l.state==='on')){
       fetch('/api/toggle/light/'+encodeURIComponent(l.id)+'/'+service,{method:'POST'});
     }
   }
@@ -470,7 +473,9 @@ function showLightPopup(rk){
   html+='<div style="display:flex;flex-wrap:wrap;gap:6px">';
   for(var li=0;li<lights.length;li++){
     var l=lights[li];
-    html+='<div style="display:flex;align-items:center;gap:6px;background:#0d1117;border:1px solid #21262d;border-radius:4px;padding:5px 10px;font-size:10px;color:#8b949e;min-width:100px;justify-content:space-between"><span style="font-size:9px;color:#484f58">'+l.name.replace('light.','').replace(/_/g,' ').replace(/yeelink cn|ml9 s 2|ml1 s 2|lemesh cn|wy0c\d+|linp cn/i,'').substring(0,18).trim()+'</span><span onclick="toggleLight(\''+l.id+'\')" style="cursor:pointer;font-size:14px;color:'+(l.state=='on'?'#d29922':'#484f58')+'">'+(l.state=='on'?'●':'○')+'</span></div>';
+    var known=l.state==='on'||l.state==='off';
+    var lightState=known?'<span onclick="toggleLight(\''+rk+'\',\''+l.id+'\')" style="cursor:pointer;font-size:14px;color:'+(l.state==='on'?'#d29922':'#484f58')+'">'+(l.state==='on'?'●':'○')+'</span>':'<span title="状态未知">?</span>';
+    html+='<div style="display:flex;align-items:center;gap:6px;background:#0d1117;border:1px solid #21262d;border-radius:4px;padding:5px 10px;font-size:10px;color:#8b949e;min-width:100px;justify-content:space-between"><span style="font-size:9px;color:#484f58">'+l.name.replace('light.','').replace(/_/g,' ').replace(/yeelink cn|ml9 s 2|ml1 s 2|lemesh cn|wy0c\d+|linp cn/i,'').substring(0,18).trim()+'</span>'+lightState+'</div>';
   }
   html+='</div></div>';
   var pop=document.createElement('div');pop.className='energy-popup open';pop.style.cssText='display:flex!important;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:999;justify-content:center;align-items:center';
@@ -479,21 +484,74 @@ function showLightPopup(rk){
   document.body.appendChild(pop);
 }
 
+var dashboardLoading=false, dashboardSnapshotTime=0;
+var dashboardTimeFormat=new Intl.DateTimeFormat('zh-CN',{
+  timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'
+});
+
+function snapshotTime(snapshot){
+  if(!snapshot)return 0;
+  if(Number.isFinite(snapshot.generated_at))return snapshot.generated_at*1000;
+  if(typeof snapshot.ts==='string'){
+    var ts=snapshot.ts.replace(' ','T');
+    return Date.parse(/(?:Z|[+-]\d{2}:\d{2})$/.test(ts)?ts:ts+'+08:00')||0;
+  }
+  return 0;
+}
+
+function setDashboardStatus(message,warning){
+  var status=document.getElementById('status');
+  status.dataset.state=warning?'warning':'current';
+  status.textContent=message;
+}
+
+async function fetchDashboardState(name,signal){
+  try{
+    var res=await fetch('/static/data/state_'+name+'.json?t='+Date.now(),{signal:signal,cache:'no-store'});
+    var data=res.ok?await res.json():null;
+    return data&&typeof data==='object'&&!Array.isArray(data)?data:null;
+  }catch(_){return null;}
+}
+
 async function load(){
-try{
-var files=['room_state','env_quality','device_protection','external_env','room_mode','energy_stats','lights','climate_intent'];
-var fetched={};
-for(var i=0;i<files.length;i++){
-var f=files[i];
-var res=await fetch('/static/data/state_'+f+'.json?t='+Date.now());
-fetched[f]=res.ok?await res.json():null;
-}
-DATA=fetched;
-renderAll();
-document.getElementById('status').innerHTML='✅ '+new Date().toLocaleTimeString('zh-CN');
-}catch(e){
-document.getElementById('status').innerHTML='⚠️ '+e.message;
-}
+  if(dashboardLoading)return;
+  dashboardLoading=true;
+  var abort=new AbortController();
+  var timeout=setTimeout(function(){abort.abort();},10000);
+  var previous=DATA;
+  try{
+    var files=['room_state','env_quality','device_protection','external_env','room_mode','energy_stats','lights','climate_intent'];
+    var snapshots=await Promise.all(files.map(function(name){return fetchDashboardState(name,abort.signal);}));
+    var fetched={};
+    files.forEach(function(name,index){fetched[name]=snapshots[index];});
+    var now=Date.now();
+    var core=[fetched.room_state,fetched.env_quality,fetched.device_protection];
+    if(!core[0]?.rooms||!core[1]?.rooms||!core[2]?.devices)throw new Error('Incomplete room data');
+    var coreTimes=core.map(snapshotTime);
+    var sourceTime=coreTimes.every(Boolean)?Math.min.apply(null,coreTimes):0;
+    var lightsTime=snapshotTime(fetched.lights);
+    if(!lightsTime||Math.abs(now-lightsTime)>180000)fetched.lights=null;
+    DATA=fetched;
+    renderAll();
+    paintControlSwitches();
+    dashboardSnapshotTime=sourceTime;
+    var updated=sourceTime?' · '+dashboardTimeFormat.format(sourceTime):'';
+    var stale=coreTimes.some(function(time){return !time||Math.abs(now-time)>180000;});
+    var missing=files.filter(function(name){return !fetched[name];});
+    setDashboardStatus((stale?'房间数据未更新':missing.length?'部分数据暂不可用':'房间数据更新')+updated,stale||missing.length>0);
+  }catch(_){
+    DATA=previous;
+    DATA.lights=null;
+    if(dashboardSnapshotTime){
+      renderAll();
+      paintControlSwitches();
+    }
+    var last=dashboardSnapshotTime?' · '+dashboardTimeFormat.format(dashboardSnapshotTime):'';
+    setDashboardStatus('房间数据读取失败'+last,true);
+  }finally{
+    clearTimeout(timeout);
+    dashboardLoading=false;
+  }
 }
 
 function renderAll(){
@@ -1122,9 +1180,16 @@ btns[0].classList.add('active');
 renderEnergyChart('hour');
 }
 
+async function fetchEnergyHistory(){
+  var response=await fetch('/static/data/state_energy_history.json?t='+Date.now(),{cache:'no-store'});
+  if(!response.ok)throw new Error('Energy history HTTP '+response.status);
+  var history=await response.json();
+  if(!Array.isArray(history))throw new Error('Invalid energy history');
+  return history;
+}
+
 function renderEnergyChart(period){
-fetch('/static/data/state_energy_history.json?t='+Date.now())
-.then(function(r){if(!r.ok)throw Error('HTTP '+r.status);return r.json();})
+fetchEnergyHistory()
 .then(function(history){
 if(!history||!history.length){
 document.getElementById('ep-summary').innerHTML='暂无历史数据，至少需要运行5分钟后才有数据点';
@@ -1137,8 +1202,14 @@ var result=aggregateHistory(history,period,now);
 drawChart(result,period);
 })
 .catch(function(e){
-document.getElementById('ep-summary').innerHTML='加载失败: '+e.message;
+document.getElementById('ep-summary').textContent='能耗数据暂不可用';
 });
+}
+
+var shanghaiOffset=8*3600;
+function shanghaiDayStart(seconds){return Math.floor((seconds+shanghaiOffset)/86400)*86400-shanghaiOffset;}
+function deviceKwh(device){
+  return device?(device.watts||0)*(device.runtime_sec||0)/3600000:0;
 }
 
 function aggregateHistory(history,period,now){
@@ -1156,7 +1227,7 @@ var bucketSec,cutoff,bucketCount;
 
 if(period==='hour'){
 // 今日每小时
-var d=new Date();d.setHours(0,0,0,0);cutoff=parseInt(d.getTime()/1000);
+cutoff=shanghaiDayStart(now);
 bucketSec=3600;bucketCount=24;
 }else if(period==='day'){
 cutoff=now-7*86400;bucketSec=86400;bucketCount=7;
@@ -1174,17 +1245,17 @@ for(var j=0;j<dids.length;j++)buckets[t][dids[j]]=0;
 bucketLabels.push(t);
 }
 
-// 聚合（kWh = watts * (5*60/3600) / 1000 = watts / 12000）
-var KWH_FACTOR=1/12000;
+// 以设备实际采样时长换算估算用电量。
 for(var i=0;i<points.length;i++){
 var p=points[i];
 if(p.ts<cutoff)continue;
 var bt=cutoff+Math.floor((p.ts-cutoff)/bucketSec)*bucketSec;
 if(!buckets[bt])continue;
-buckets[bt].total+=p.total_watts*KWH_FACTOR;
 var devs=p.devices||{};
 for(var j=0;j<dids.length;j++){
-buckets[bt][dids[j]]+=(devs[dids[j]]?devs[dids[j]].watts:0)*KWH_FACTOR;
+var kwh=deviceKwh(devs[dids[j]]);
+buckets[bt][dids[j]]+=kwh;
+buckets[bt].total+=kwh;
 }
 }
 
@@ -1242,12 +1313,11 @@ return{labels:labels,datasets:datasets};
 }
 
 function formatBucketLabel(ts,period){
-var d=new Date(ts*1000);
-if(period==='hour')return ('0'+d.getHours()).slice(-2)+':00';
-if(period==='day'||period==='month')return (d.getMonth()+1)+'/'+d.getDate();
-// week
-var end=new Date((ts+7*86400)*1000);
-return (d.getMonth()+1)+'/'+d.getDate()+'-'+(end.getMonth()+1)+'/'+end.getDate();
+var d=new Date((ts+shanghaiOffset)*1000);
+if(period==='hour')return ('0'+d.getUTCHours()).slice(-2)+':00';
+if(period==='day'||period==='month')return (d.getUTCMonth()+1)+'/'+d.getUTCDate();
+var end=new Date((ts+shanghaiOffset+7*86400)*1000);
+return (d.getUTCMonth()+1)+'/'+d.getUTCDate()+'-'+(end.getUTCMonth()+1)+'/'+end.getUTCDate();
 }
 
 function drawChart(result,period){
@@ -1542,22 +1612,37 @@ function showRoomData(rk){
 }
 function setRdTab(act){var tb=document.querySelectorAll('#rd-tabs button');for(var ti=0;ti<tb.length;ti++)tb[ti].classList.remove('active');for(var tj=0;tj<tb.length;tj++){if(tb[tj].textContent.indexOf(act)>=0)tb[tj].classList.add('active');}}
 function renderRoomEnergy(rk){
-  if(window._rdChart){window._rdChart.destroy();window._rdChart=null;}setRdTab('能耗');
-  var devs=ROOM_DEV_MAP[rk]||[];
-  fetch('/static/data/state_energy_history.json?t='+Date.now()).then(function(r){return r.json()}).then(function(history){
-    if(!history||!history.length){document.getElementById('rd-content').innerHTML='暂无数据';return;}
-    var d=new Date();d.setHours(0,0,0,0);var cutoff=parseInt(d.getTime()/1000);
-    var buckets={};for(var h=0;h<24;h++){buckets[h]=0;}
-    for(var i=0;i<history.length;i++){
-      var p=history[i];if(p.ts<cutoff)continue;var hh=new Date(p.ts*1000).getHours();
-      if(!devs.length)buckets[hh]+=(p.total_watts||0)/1000;
-      else{var dd=p.devices||{};for(var j=0;j<devs.length;j++){var dv=dd[devs[j]];if(dv)buckets[hh]+=(dv.watts||0)/1000;}}
-    }
-    var labels=[],vals=[];for(var h=0;h<24;h++){labels.push(h+'时');vals.push((buckets[h]||0).toFixed(2));}
-    var maxV=0,total=0;for(var k=0;k<vals.length;k++){var v=parseFloat(vals[k]);if(v>maxV)maxV=v;total+=v;}
-    document.getElementById('rd-content').innerHTML='<canvas id="rd-chart" style="max-height:300px"></canvas><div style="font-size:12px;color:#8b949e;text-align:center;margin-top:8px">今日估算：<span style="color:#d2a8ff;font-weight:600">'+total.toFixed(3)+' kWh</span></div>';
-    window._rdChart=new Chart(document.getElementById('rd-chart').getContext('2d'),{type:'bar',data:{labels:labels,datasets:[{label:'kW',data:vals,backgroundColor:'rgba(88,166,255,0.4)',borderColor:'rgba(88,166,255,0.8)',borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,ticks:{color:'#8b949e'}},x:{ticks:{color:'#8b949e'}}},plugins:{legend:{labels:{color:'#c9d1d9'}}}}});
-  });
+  setRdTab('能耗');
+  renderDailyEnergy(ROOM_DEV_MAP[rk]||[],'今日估算');
+}
+
+var dailyEnergyRequest=0;
+async function renderDailyEnergy(deviceIds,label){
+  if(window._rdChart){window._rdChart.destroy();window._rdChart=null;}
+  var requestId=++dailyEnergyRequest;
+  var content=document.getElementById('rd-content');
+  content.textContent='正在加载能耗数据…';
+  function isCurrent(){
+    return requestId===dailyEnergyRequest&&document.querySelector('#rd-tabs button.active')?.textContent.includes('能耗');
+  }
+  try{
+    var history=await fetchEnergyHistory();
+    if(!isCurrent())return;
+    var cutoff=shanghaiDayStart(Date.now()/1000);
+    var today=history.filter(function(point){return point.ts>=cutoff&&point.ts<cutoff+86400;});
+    if(!today.length){content.textContent='今日暂无能耗数据';return;}
+    var buckets=Array(24).fill(0);
+    today.forEach(function(point){
+      var devices=point.devices||{};
+      var ids=deviceIds||Object.keys(devices);
+      var hour=Math.floor((point.ts-cutoff)/3600);
+      ids.forEach(function(id){buckets[hour]+=deviceKwh(devices[id]);});
+    });
+    var total=buckets.reduce(function(sum,kwh){return sum+kwh;},0);
+    content.innerHTML='<canvas id="rd-chart" style="max-height:300px"></canvas><div style="font-size:12px;color:#8b949e;text-align:center;margin-top:8px">'+label+'：<span style="color:#d2a8ff;font-weight:600">'+total.toFixed(3)+' kWh</span></div>';
+    var labels=buckets.map(function(_,hour){return hour+'时';});
+    window._rdChart=new Chart(document.getElementById('rd-chart').getContext('2d'),{type:'bar',data:{labels:labels,datasets:[{label:'kWh',data:buckets.map(function(kwh){return Number(kwh.toFixed(3));}),backgroundColor:'rgba(88,166,255,0.4)',borderColor:'rgba(88,166,255,0.8)',borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,ticks:{color:'#8b949e'}},x:{ticks:{color:'#8b949e'}}},plugins:{legend:{labels:{color:'#c9d1d9'}}}}});
+  }catch(_){if(isCurrent())content.textContent='能耗数据暂不可用';}
 }
 function renderRoomStandby(rk){
   if(window._rdChart){window._rdChart.destroy();window._rdChart=null;}setRdTab('待机');
@@ -1631,17 +1716,8 @@ function showUnifiedData(tab){
 }
 function setUniTab(act){var tb=document.querySelectorAll('#rd-tabs button');for(var ti=0;ti<tb.length;ti++)tb[ti].classList.remove('active');for(var tj=0;tj<tb.length;tj++){if(tb[tj].textContent.indexOf(act)>=0)tb[tj].classList.add('active');}}
 function renderUniEnergy(){
-  if(window._rdChart){window._rdChart.destroy();window._rdChart=null;}setUniTab('能耗');
-  fetch('/static/data/state_energy_history.json?t='+Date.now()).then(function(r){return r.json()}).then(function(history){
-    if(!history||!history.length){document.getElementById('rd-content').innerHTML='暂无数据';return;}
-    var d=new Date();d.setHours(0,0,0,0);var cutoff=parseInt(d.getTime()/1000);
-    var buckets={};for(var h=0;h<24;h++){buckets[h]=0;}
-    for(var i=0;i<history.length;i++){var p=history[i];if(p.ts<cutoff)continue;buckets[new Date(p.ts*1000).getHours()]+=(p.total_watts||0)/1000;}
-    var labels=[],vals=[];for(var h=0;h<24;h++){labels.push(h+'时');vals.push((buckets[h]||0).toFixed(2));}
-    var total=0;for(var t=0;t<vals.length;t++)total+=parseFloat(vals[t]);
-    document.getElementById('rd-content').innerHTML='<canvas id="rd-chart" style="max-height:300px"></canvas><div style="font-size:12px;color:#8b949e;text-align:center;margin-top:8px">全屋今日估算：<span style="color:#d2a8ff;font-weight:600">'+total.toFixed(3)+' kWh</span></div>';
-    window._rdChart=new Chart(document.getElementById('rd-chart').getContext('2d'),{type:'bar',data:{labels:labels,datasets:[{label:'kW',data:vals,backgroundColor:'rgba(88,166,255,0.4)',borderColor:'rgba(88,166,255,0.8)',borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,ticks:{color:'#8b949e'}},x:{ticks:{color:'#8b949e'}}},plugins:{legend:{labels:{color:'#c9d1d9'}}}}});
-  });
+  setUniTab('能耗');
+  renderDailyEnergy(null,'全屋今日估算');
 }
 function renderUniStandby(){
   if(window._rdChart){window._rdChart.destroy();window._rdChart=null;}setUniTab('待机');
