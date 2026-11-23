@@ -13,6 +13,10 @@ time.tzset()
 # 确保模块路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# 温控模块会将 Hermes 脚本目录加入搜索路径，那里还有旧版 energy_tracker。
+# 在加载温控模块前绑定本仓库的能耗实现。
+from energy_tracker import run as energy_run
+
 STATE_DIR = "/tmp/hermes_states"
 DATA_DIR = "/opt/ha-controller/data"
 os.makedirs(STATE_DIR, exist_ok=True)
@@ -181,7 +185,6 @@ def main():
 
     # ── 7. 能耗 ──
     try:
-        from energy_tracker import run as energy_run
         energy_run(dashboard_dir=None)
         sync_file("energy_stats.json", "state_energy_stats.json")
         sync_file("energy_history.json", "state_energy_history.json")
@@ -208,7 +211,7 @@ if __name__ == "__main__":
         try:
             # 彻底清除所有状态机相关的模块缓存
             for key in list(sys.modules.keys()):
-                if any(x in key for x in ['state_machines', 'room_state', 'env_quality', 'device_protection', 'external_env', 'climate_engine', 'snapshot_sensors', 'energy_tracker']):
+                if any(x in key for x in ['state_machines', 'room_state', 'env_quality', 'device_protection', 'external_env', 'climate_engine', 'snapshot_sensors']):
                     del sys.modules[key]
             main()
         except Exception as e:
